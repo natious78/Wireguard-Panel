@@ -1,0 +1,7 @@
+import { Database, KeyRound, RefreshCw, ShieldCheck } from "lucide-react";
+import { PageHeader } from "@/components/ui";
+import { SettingsForm } from "@/components/settings-form";
+import { getStatusThresholds } from "@/server/settings";
+import { env } from "@/lib/env";
+export const metadata={title:"Settings"};
+export default async function SettingsPage(){const thresholds=await getStatusThresholds();return <><PageHeader title="Settings" description="Operational thresholds and deployment-controlled security posture."/><div className="grid-sidebar"><section className="card"><div className="card-header"><h2>Peer presence thresholds</h2></div><div className="card-body"><SettingsForm online={thresholds.onlineSeconds} recent={thresholds.recentSeconds}/></div></section><aside className="card"><div className="card-header"><h2>Runtime posture</h2></div><div className="card-body"><dl className="detail-list"><dt><RefreshCw size={15}/> Synchronization</dt><dd>Every {env().SYNC_INTERVAL_SECONDS} seconds</dd><dt><ShieldCheck size={15}/> Session lifetime</dt><dd>{env().SESSION_TTL_HOURS} hours</dd><dt><KeyRound size={15}/> Secret encryption</dt><dd>AES-256-GCM</dd><dt><Database size={15}/> Database</dt><dd>PostgreSQL</dd></dl><p className="cell-sub">Security-sensitive runtime values are controlled through environment variables and container restart, not a browser form.</p></div></aside></div></>}

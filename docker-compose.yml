@@ -1,0 +1,72 @@
+x-app-environment: &app-environment
+  NODE_ENV: ${NODE_ENV:-production}
+  APP_URL: ${APP_URL:-http://localhost:2040}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-wireguard_control}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-wireguard_control}
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Set APP_ENCRYPTION_KEY in .env}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+  SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+  SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-300}
+  EXPIRATION_INTERVAL_SECONDS: ${EXPIRATION_INTERVAL_SECONDS:-60}
+  ROUTER_CONNECT_TIMEOUT_MS: ${ROUTER_CONNECT_TIMEOUT_MS:-8000}
+  ONLINE_THRESHOLD_SECONDS: ${ONLINE_THRESHOLD_SECONDS:-180}
+  RECENT_THRESHOLD_SECONDS: ${RECENT_THRESHOLD_SECONDS:-900}
+  DEMO_MODE: ${DEMO_MODE:-false}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wireguard_control}
+      POSTGRES_USER: ${POSTGRES_USER:-wireguard_control}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [backend]
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      PORT: 2040
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "2040:2040"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:2040/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [backend]
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["./node_modules/.bin/tsx", "scripts/worker.ts"]
+    environment:
+      <<: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    networks: [backend]
+
+volumes:
+  postgres_data:
+
+networks:
+  backend:
+    driver: bridge

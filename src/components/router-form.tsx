@@ -1,0 +1,35 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { CheckCircle2, LoaderCircle, PlugZap, Save, X } from "lucide-react";
+import { api } from "@/lib/client-api";
+
+export type RouterFormValue={id?:string;name:string;managementIp:string;apiPort:number;apiType:"native"|"rest";username:string;endpointHostname:string;endpointIp:string;wireguardPort:number;useTls:boolean;verifyTls:boolean;enabled:boolean};
+const empty:RouterFormValue={name:"",managementIp:"",apiPort:8728,apiType:"native",username:"",endpointHostname:"",endpointIp:"",wireguardPort:51820,useTls:false,verifyTls:true,enabled:true};
+
+export function RouterForm({initial=empty,modal=false}:{initial?:RouterFormValue;modal?:boolean}){
+ const router=useRouter();const [value,setValue]=useState(initial);const [password,setPassword]=useState("");const [loading,setLoading]=useState<"test"|"save"|"">("");const [message,setMessage]=useState<{type:"error"|"success";text:string}|null>(null);
+ const payload=()=>({...value,password:password||undefined});
+ const close=()=>{if(modal)router.push("/routers")};
+ const test=async()=>{setLoading("test");setMessage(null);try{let result:{status:string;facts:{identity:string;version:string};interfaces:unknown[]};if(value.id&&!password){result=await api(`/api/routers/${value.id}/test`,{method:"POST"})}else{result=await api("/api/routers/test",{method:"POST",body:JSON.stringify(payload())})}setMessage({type:"success",text:`Connected to ${result.facts.identity} · RouterOS ${result.facts.version} · ${result.interfaces.length} WireGuard interface${result.interfaces.length===1?"":"s"}`})}catch(e){setMessage({type:"error",text:e instanceof Error?e.message:"Connection failed"})}finally{setLoading("")}};
+ const save=async(e:React.FormEvent)=>{e.preventDefault();setLoading("save");setMessage(null);try{if(value.id)await api(`/api/routers/${value.id}`,{method:"PUT",body:JSON.stringify(payload())});else await api("/api/routers",{method:"POST",body:JSON.stringify(payload())});setMessage({type:"success",text:value.id?"Router updated and synchronized.":"Router added and existing peers imported."});setTimeout(()=>{router.push("/routers");router.refresh()},500)}catch(error){setMessage({type:"error",text:error instanceof Error?error.message:"Save failed"})}finally{setLoading("")}};
+ const content=<form className="form" onSubmit={save}>
+   <div className="form-grid">
+    <div className="form-group"><label className="label" htmlFor="router-name">Name</label><input id="router-name" className="field" required value={value.name} onChange={e=>setValue({...value,name:e.target.value})} placeholder="Office Router"/></div>
+    <div className="form-group"><label className="label" htmlFor="management-ip">Management IP</label><input id="management-ip" className="field mono" required value={value.managementIp} onChange={e=>setValue({...value,managementIp:e.target.value})} placeholder="192.168.10.254"/><div className="hint">Always used for API communication.</div></div>
+    <div className="form-group"><label className="label" htmlFor="api-type">API transport</label><select id="api-type" className="field" value={value.apiType} onChange={e=>{const apiType=e.target.value as "native"|"rest";setValue({...value,apiType,apiPort:apiType==="native"?(value.useTls?8729:8728):(value.useTls?443:80)})}}><option value="native">RouterOS native API</option><option value="rest">RouterOS REST API</option></select></div>
+    <div className="form-group"><label className="label" htmlFor="api-port">API port</label><input id="api-port" className="field" type="number" min="1" max="65535" required value={value.apiPort} onChange={e=>setValue({...value,apiPort:Number(e.target.value)})}/></div>
+    <div className="form-group"><label className="label" htmlFor="router-user">API username</label><input id="router-user" className="field" required autoComplete="off" value={value.username} onChange={e=>setValue({...value,username:e.target.value})}/></div>
+    <div className="form-group"><label className="label" htmlFor="router-password">API password {value.id&&<span className="hint">(leave blank to keep current)</span>}</label><input id="router-password" className="field" type="password" required={!value.id} autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)}/></div>
+    <div className="form-group"><label className="label" htmlFor="endpoint-host">Endpoint hostname <span className="hint">(optional)</span></label><input id="endpoint-host" className="field" value={value.endpointHostname} onChange={e=>setValue({...value,endpointHostname:e.target.value})} placeholder="vpn.example.com"/></div>
+    <div className="form-group"><label className="label" htmlFor="endpoint-ip">Public endpoint IP <span className="hint">(optional)</span></label><input id="endpoint-ip" className="field mono" value={value.endpointIp} onChange={e=>setValue({...value,endpointIp:e.target.value})} placeholder="203.0.113.10"/></div>
+    <div className="form-group"><label className="label" htmlFor="wg-port">WireGuard endpoint port</label><input id="wg-port" className="field" type="number" min="1" max="65535" value={value.wireguardPort} onChange={e=>setValue({...value,wireguardPort:Number(e.target.value)})}/></div>
+    <div className="form-group"><div className="checkbox"><input id="use-tls" type="checkbox" checked={value.useTls} onChange={e=>setValue({...value,useTls:e.target.checked,apiPort:value.apiType==="native"?(e.target.checked?8729:8728):(e.target.checked?443:80)})}/><label htmlFor="use-tls">Use TLS for API connection</label></div><div className="checkbox"><input id="verify-tls" type="checkbox" checked={value.verifyTls} disabled={!value.useTls} onChange={e=>setValue({...value,verifyTls:e.target.checked})}/><label htmlFor="verify-tls">Verify TLS certificate</label></div></div>
+   </div>
+   {message&&<div className={`form-message form-message-${message.type}`} role="status">{message.type==="success"&&<CheckCircle2 size={15}/>} {message.text}</div>}
+   <div className="actions"><button type="button" className="button" onClick={test} disabled={!!loading}>{loading==="test"?<LoaderCircle className="spin"/>:<PlugZap/>}Test connection</button><button className="button button-primary" disabled={!!loading}>{loading==="save"?<LoaderCircle className="spin"/>:<Save/>}{value.id?"Save changes":"Add and import"}</button></div>
+ </form>;
+ if(!modal)return content;
+ return <div className="dialog-backdrop" role="presentation" onMouseDown={e=>{if(e.currentTarget===e.target)close()}}><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="router-form-title"><header className="dialog-header"><div><h2 id="router-form-title">Add MikroTik router</h2><p>Credentials are tested before anything is saved.</p></div><button className="button button-ghost icon-button" aria-label="Close" onClick={close}><X/></button></header><div className="dialog-body">{content}</div></section></div>;
+}
