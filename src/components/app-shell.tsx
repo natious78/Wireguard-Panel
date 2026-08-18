@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Activity, BookOpenCheck, Cable, Gauge, LayoutDashboard, LogOut, Menu, Router, Settings, ShieldCheck, Waypoints, X } from "lucide-react";
+import { Activity, BookOpenCheck, Cable, Gauge, LayoutDashboard, LogOut, Menu, Network, Router, Settings, ShieldCheck, Waypoints, X } from "lucide-react";
 import { api } from "@/lib/client-api";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -11,6 +11,7 @@ const items = [
   { href: "/routers", label: "Routers", icon: Router },
   { href: "/peers", label: "WireGuard Peers", icon: Waypoints },
   { href: "/interfaces", label: "Interfaces", icon: Cable },
+  { href: "/pools", label: "WireGuard Pools", icon: Network },
   { href: "/traffic", label: "Traffic", icon: Activity },
   { href: "/audit", label: "Audit Logs", icon: BookOpenCheck },
   { href: "/settings", label: "Settings", icon: Settings },

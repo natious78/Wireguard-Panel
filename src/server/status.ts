@@ -1,14 +1,18 @@
 import { env } from "@/lib/env";
 
-export type PeerStatus = "online" | "recent" | "offline" | "never" | "disabled" | "expired";
+export type PeerStatus = "online" | "recent" | "offline" | "never" | "disabled" | "expired" | "traffic_limit_reached" | "router_unreachable";
 
-export function peerStatus(peer: { disabled: boolean; expired: boolean; last_handshake_at: Date | string | null }, now = new Date(), thresholds = { onlineSeconds: env().ONLINE_THRESHOLD_SECONDS, recentSeconds: env().RECENT_THRESHOLD_SECONDS }): PeerStatus {
+export function peerStatus(peer: { disabled: boolean; remote_disabled?: boolean | null; expired: boolean; last_handshake_at: Date | string | null; quota_reached_at?: Date | string | null; router_stats_status?: string | null }, now = new Date(), thresholds = { onlineSeconds: env().ONLINE_THRESHOLD_SECONDS, recentSeconds: env().RECENT_THRESHOLD_SECONDS }): PeerStatus {
   if (peer.expired) return "expired";
-  if (peer.disabled) return "disabled";
+  if (peer.quota_reached_at) return "traffic_limit_reached";
+  if (peer.disabled || peer.remote_disabled) return "disabled";
+  if (peer.router_stats_status === "unreachable") return "router_unreachable";
   if (!peer.last_handshake_at) return "never";
-  const age = (now.getTime() - new Date(peer.last_handshake_at).getTime()) / 1000;
-  if (age < thresholds.onlineSeconds) return "online";
-  if (age < thresholds.recentSeconds) return "recent";
+  const timestamp = new Date(peer.last_handshake_at).getTime();
+  if (!Number.isFinite(timestamp)) return "never";
+  const age = Math.max(0,(now.getTime() - timestamp) / 1000);
+  if (age <= thresholds.onlineSeconds) return "online";
+  if (age <= thresholds.recentSeconds) return "recent";
   return "offline";
 }
 

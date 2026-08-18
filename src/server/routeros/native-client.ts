@@ -52,7 +52,7 @@ export class NativeRouterOsClient implements RouterOsClient {
   }
 
   async getInterfaces(): Promise<RemoteWireGuardInterface[]> { return (await this.command("/interface/wireguard/print")).map(normalizeInterface); }
-  async getPeers(): Promise<RemoteWireGuardPeer[]> { return (await this.command("/interface/wireguard/peers/print")).map(normalizePeer); }
+  async getPeers(): Promise<RemoteWireGuardPeer[]> { const observedAt=new Date();return (await this.command("/interface/wireguard/peers/print")).map(row=>normalizePeer(row,observedAt)); }
   async getAddresses(): Promise<RemoteAddress[]> {
     return (await this.command("/ip/address/print")).map((row) => ({
       id: row[".id"] ?? "", interfaceName: row.interface ?? "", address: row.address ?? "", disabled: rosBoolean(row.disabled),

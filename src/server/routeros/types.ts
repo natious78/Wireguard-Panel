@@ -42,6 +42,8 @@ export type RemoteWireGuardPeer = {
   persistentKeepalive: number;
   disabled: boolean;
   lastHandshakeAt: Date | null;
+  lastHandshakeRaw: string | null;
+  lastHandshakeParseValid: boolean;
   rxBytes: bigint;
   txBytes: bigint;
 };
@@ -60,7 +62,7 @@ export type CreateRemotePeer = {
   disabled?: boolean;
 };
 
-export type UpdateRemotePeer = Partial<Omit<CreateRemotePeer, "interfaceName">> & {
+export type UpdateRemotePeer = Partial<CreateRemotePeer> & {
   endpointAddress?: string | null;
   endpointPort?: number | null;
 };

@@ -11,7 +11,7 @@ export async function enforceExpirations() {
   for (const peer of result.rows) {
     try {
       await query("UPDATE peers SET expired=true,updated_at=now() WHERE id=$1", [peer.id]);
-      await setPeerEnabled(peer.id, false);
+      await setPeerEnabled(peer.id, false, "expired");
       await query(
         `INSERT INTO audit_logs(username,action,peer_id,result,details) VALUES('system','peer_expired',$1,'success',$2)`,
         [peer.id, JSON.stringify({ name: peer.name })],

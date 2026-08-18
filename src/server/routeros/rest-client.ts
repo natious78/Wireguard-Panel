@@ -84,7 +84,8 @@ export class RestRouterOsClient implements RouterOsClient {
     return (await this.request<Record<string, unknown>[]>("interface/wireguard")).map(normalizeInterface);
   }
   async getPeers(): Promise<RemoteWireGuardPeer[]> {
-    return (await this.request<Record<string, unknown>[]>("interface/wireguard/peers")).map(normalizePeer);
+    const observedAt=new Date();
+    return (await this.request<Record<string, unknown>[]>("interface/wireguard/peers")).map(row=>normalizePeer(row,observedAt));
   }
   async getAddresses(): Promise<RemoteAddress[]> {
     return (await this.request<Record<string, unknown>[]>("ip/address")).map((row) => ({

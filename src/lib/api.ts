@@ -16,5 +16,6 @@ export function handleApiError(error: unknown) {
   }
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
   if (code === "23505") return fail("That value is already in use. Refresh the page and choose another value.", 409);
+  if (code === "IP_ALLOCATION") return fail(redactError(error),409);
   return fail(redactError(error), 500);
 }

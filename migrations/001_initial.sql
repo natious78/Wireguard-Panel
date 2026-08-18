@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS peers (
   client_ip TEXT,
   allowed_address TEXT NOT NULL,
   client_allowed_ips TEXT NOT NULL DEFAULT '0.0.0.0/0',
-  dns_server TEXT NOT NULL DEFAULT '1.1.1.1',
+  dns_server TEXT NOT NULL DEFAULT '8.8.8.8',
   endpoint_override TEXT,
   endpoint_port_override INTEGER CHECK (endpoint_port_override BETWEEN 1 AND 65535),
   persistent_keepalive INTEGER NOT NULL DEFAULT 25 CHECK (persistent_keepalive BETWEEN 0 AND 65535),
