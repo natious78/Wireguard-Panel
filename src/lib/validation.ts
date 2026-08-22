@@ -47,6 +47,8 @@ export const peerCreateSchema = z.object({
   dnsServer: z.string().trim().min(1).max(255).default("1.1.1.1"),
   persistentKeepalive: z.coerce.number().int().min(0).max(65535).default(25),
   mtu: z.coerce.number().int().min(576).max(9000).default(1420),
+  endpointOverride: z.string().trim().max(255).nullable().optional(),
+  endpointPortOverride: z.coerce.number().int().min(1).max(65535).nullable().optional(),
   expiresAt: z.string().datetime().nullable().optional().transform((value) => value ? new Date(value) : null),
   usePresharedKey: z.boolean().default(false),
   ...quotaFields,

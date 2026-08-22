@@ -26,6 +26,8 @@ export type CreatePeerInput = {
   dnsServer?: string;
   persistentKeepalive?: number;
   mtu?: number;
+  endpointOverride?: string | null;
+  endpointPortOverride?: number | null;
   expiresAt?: Date | null;
   usePresharedKey?: boolean;
   quotaBytes?: bigint | null;
@@ -61,8 +63,8 @@ export async function createPeer(input: CreatePeerInput) {
       if(!remote)throw new Error("RouterOS created the peer but did not return it during verification.");
       const fingerprint=remotePeerFingerprint(remote);
       const quotaWindow=input.quotaBytes&&input.quotaPeriod?quotaPeriodWindow(new Date(),input.quotaPeriod,await getQuotaPolicy()):null;
-      const endpointHost=pool.endpoint_host||router.endpoint_hostname||router.endpoint_ip||router.management_ip;
-      const endpointPort=pool.endpoint_port||router.wireguard_port||wgInterface.listen_port;
+      const endpointHost=input.endpointOverride||pool.endpoint_host||router.endpoint_hostname||router.endpoint_ip||router.management_ip;
+      const endpointPort=input.endpointPortOverride||pool.endpoint_port||router.wireguard_port||wgInterface.listen_port;
       const dns=input.dnsServer||pool.dns;const clientAllowed=input.clientAllowedIps||pool.client_allowed_ips;
       const keepalive=input.persistentKeepalive??pool.persistent_keepalive;const mtu=input.mtu??pool.mtu;
       const config=generateClientConfig({privateKey:keys.privateKey,clientIp,dns,serverPublicKey:wgInterface.public_key,presharedKey:keys.presharedKey,
@@ -83,7 +85,7 @@ export async function createPeer(input: CreatePeerInput) {
           clientIp, allowedAddress, clientAllowed,dns,keepalive,mtu,
           input.expiresAt ?? null, fingerprint, JSON.stringify({ ...remote, rxBytes: remote.rxBytes.toString(), txBytes: remote.txBytes.toString() }), input.userId,
           input.quotaBytes?.toString() ?? null, input.quotaBytes ? input.quotaPeriod : null, quotaWindow?.start ?? null, quotaWindow?.end ?? null,
-          remote.rxBytes.toString(), remote.txBytes.toString(),pool.id,pool.endpoint_host,pool.endpoint_port,remote.disabled,remote.lastHandshakeRaw,
+          remote.rxBytes.toString(), remote.txBytes.toString(),pool.id,input.endpointOverride||null,input.endpointPortOverride||null,remote.disabled,remote.lastHandshakeRaw,
           remote.lastHandshakeParseValid,qr.hash,qr.pngEncrypted,qr.svgEncrypted],
       );
       await claimPoolAddress(db,pool,clientIp,result.rows[0].id,input.name);

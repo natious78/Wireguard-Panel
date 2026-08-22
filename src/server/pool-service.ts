@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import { query,withTransaction } from "@/lib/db";
 import { allowedAddressOwnsIp,ipv4Range,ipv4ToNumber,normalizeClientIp,numberToIpv4,parseIpv4Cidr,suggestPoolFromInterfaceAddress,validatePoolRange,IpAllocationError } from "./ip-allocation";
 import type { RemoteWireGuardPeer } from "./routeros";
+import { compareIpAddresses } from "@/lib/ip-sort";
 
 export const MAX_POOL_ADDRESSES=65_536;
 
@@ -116,7 +117,7 @@ export async function listPoolAddresses(poolId:string,options:{filter?:string;so
   if(!rows.some(row=>row.ip===normalizeClientIp(pool.gateway_ip)))rows.push({ip:normalizeClientIp(pool.gateway_ip),state:"router",owner:pool.interface_name??"Router",comment:"WireGuard interface address"});
   const filter=options.filter??"all";let filtered=filter==="all"?rows:rows.filter(row=>row.state===filter);
   const [field="ip",direction="asc"]=(options.sort??"ip_asc").split("_");const factor=direction==="desc"?-1:1;
-  filtered=filtered.sort((a,b)=>factor*(field==="state"?a.state.localeCompare(b.state):field==="owner"?(a.owner??"").localeCompare(b.owner??""):ipv4ToNumber(a.ip)-ipv4ToNumber(b.ip)));
+  filtered=filtered.sort((a,b)=>factor*(field==="state"?a.state.localeCompare(b.state):field==="owner"?(a.owner??"").localeCompare(b.owner??""):compareIpAddresses(a.ip,b.ip)));
   const page=Math.max(1,options.page??1);const limit=Math.min(250,Math.max(25,options.limit??100));
   return{pool,rows:filtered.slice((page-1)*limit,page*limit),total:filtered.length,page,pages:Math.max(1,Math.ceil(filtered.length/limit)),stats:await getPoolStats(poolId)};
 }

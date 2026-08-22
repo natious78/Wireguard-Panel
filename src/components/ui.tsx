@@ -10,7 +10,8 @@ export function Metric({ label, value, foot, icon: Icon }: { label: string; valu
 }
 
 export function StatusBadge({ status, children }: { status: string; children?: React.ReactNode }) {
-  return <span className={`status status-${status.replaceAll("_", "-")}`}>{children ?? status.replaceAll("_", " ")}</span>;
+  const labels:Record<string,string>={online:"Online",recent:"Recently active",offline:"Offline",never:"Never connected",disabled:"Disabled",expired:"Expired",traffic_limit_reached:"Traffic limit reached",router_unreachable:"Router unreachable",connected:"Connected",partial:"Partially available",unknown:"Unknown"};
+  return <span className={`status status-${status.replaceAll("_", "-")}`}>{children ?? labels[status] ?? status.replaceAll("_", " ")}</span>;
 }
 
 export function HandshakeActivity({at,status,showStatus=false}:{at:string|Date|null;status?:string;showStatus?:boolean}){

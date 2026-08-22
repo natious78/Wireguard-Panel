@@ -46,6 +46,8 @@ export function PeerCreateDialog({ routers, interfaces, pools }: { routers: Rout
             requestedIp: assignmentMode === "manual" ? form.get("requestedIp") : undefined,
             name: form.get("name"), description: form.get("description"), clientAllowedIps: form.get("clientAllowedIps"),
             dnsServer: form.get("dnsServer"), persistentKeepalive: Number(form.get("persistentKeepalive")), mtu: Number(form.get("mtu")),
+            endpointOverride: form.get("endpointOverride") || null,
+            endpointPortOverride: form.get("endpointPortOverride") ? Number(form.get("endpointPortOverride")) : null,
             expiresAt: expirationMode === "date" && form.get("expiresAt") ? new Date(String(form.get("expiresAt"))).toISOString() : null,
             usePresharedKey: form.get("usePresharedKey") === "on", quotaEnabled,
             quotaValue: quotaEnabled ? Number(form.get("quotaValue")) : null, quotaUnit: form.get("quotaUnit") || "GB", quotaPeriod: form.get("quotaPeriod") || "monthly",
@@ -63,7 +65,7 @@ export function PeerCreateDialog({ routers, interfaces, pools }: { routers: Rout
           <fieldset className="form-section"><legend>Router and IP assignment</legend><div className="form-grid">
             <div className="form-group"><label className="label" htmlFor="peer-router">Router</label><select id="peer-router" className="field" value={routerId} onChange={(event) => { setRouterId(event.target.value); chooseInterface(event.target.value); }}>{routers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div>
             <div className="form-group"><label className="label" htmlFor="peer-interface">WireGuard interface</label><select id="peer-interface" className="field" value={interfaceId} onChange={(event) => { setInterfaceId(event.target.value); setPoolId(pools.find((item) => item.interfaceId === event.target.value && item.enabled)?.id || ""); }}>{interfaceOptions.map((item) => <option value={item.id} key={item.id}>{item.name}{item.addresses.length ? ` · ${item.addresses.join(", ")}` : ""}</option>)}</select></div>
-            <div className="form-group span-2"><label className="label" htmlFor="peer-pool">WireGuard pool</label><select id="peer-pool" className="field" value={pool?.id || ""} onChange={(event) => setPoolId(event.target.value)} required>{poolOptions.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.available}/{item.total} available</option>)}</select>{pool ? <div className="pool-preview"><div><strong>{pool.name}</strong><span className="mono">{pool.startIp} – {pool.endIp}</span></div><div><strong>{pool.available} / {pool.total}</strong><span>Available</span></div><div><strong className="mono">{pool.nextIp || "None"}</strong><span>Estimated next IP</span></div></div> : <div className="form-message form-message-error">Create or enable a WireGuard pool for this interface before provisioning a peer.</div>}</div>
+            <div className="form-group span-2"><label className="label" htmlFor="peer-pool">WireGuard pool</label><select id="peer-pool" className="field" value={pool?.id || ""} onChange={(event) => setPoolId(event.target.value)} required>{poolOptions.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.available}/{item.total} available</option>)}</select>{pool ? <div className="pool-preview"><div><strong>{pool.name}</strong><span className="mono">{pool.network} · {pool.startIp} – {pool.endIp}</span></div><div><strong>{pool.available} / {pool.total}</strong><span>Available · {pool.total-pool.available} used or reserved</span></div><div><strong className="mono">{pool.nextIp || "None"}</strong><span>Estimated next IP</span></div></div> : <div className="form-message form-message-error">Create or enable a WireGuard pool for this interface before provisioning a peer.</div>}</div>
             <fieldset className="form-group span-2 choice-group"><legend>IP assignment</legend><label><input type="radio" name="assignmentMode" value="automatic" checked={assignmentMode === "automatic"} onChange={() => setAssignmentMode("automatic")} />Automatic from pool</label><label><input type="radio" name="assignmentMode" value="manual" checked={assignmentMode === "manual"} onChange={() => setAssignmentMode("manual")} />Manual</label></fieldset>
             {assignmentMode === "manual" && <div className="form-group span-2"><label className="label" htmlFor="manual-client-ip">Manual IP</label><input id="manual-client-ip" className="field mono" name="requestedIp" placeholder={pool?.nextIp || "10.20.30.50"} required /><div className="hint">Blocked if PostgreSQL, a reservation, or a live MikroTik allowed-address owns this IP.</div></div>}
           </div></fieldset>
@@ -73,15 +75,23 @@ export function PeerCreateDialog({ routers, interfaces, pools }: { routers: Rout
             {quotaEnabled && <><div className="form-group"><label className="label" htmlFor="quota-value">Limit</label><div className="input-pair"><input id="quota-value" className="field" name="quotaValue" type="number" min="0.001" max="1000000" step="0.001" required /><select className="field" name="quotaUnit" aria-label="Traffic limit unit" defaultValue="GB"><option>MB</option><option>GB</option><option>TB</option></select></div></div><div className="form-group span-2"><label className="label" htmlFor="quota-period">Quota period</label><select id="quota-period" className="field" name="quotaPeriod" defaultValue="monthly"><option value="one_time">Total</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div></>}
           </div></fieldset>
 
-          <fieldset className="form-section"><legend>Expiration and client defaults</legend><div className="form-grid">
+          <fieldset className="form-section"><legend>Expiration</legend><div className="form-grid">
             <div className="form-group"><label className="label" htmlFor="expiration-mode">Expiration</label><select id="expiration-mode" className="field" value={expirationMode} onChange={(event) => setExpirationMode(event.target.value as "never" | "date")}><option value="never">Never</option><option value="date">Date</option></select></div>
             {expirationMode === "date" && <Field name="expiresAt" label="Expires at" type="datetime-local" />}
-            <Field name="dnsServer" label="DNS" value={pool?.dns || "1.1.1.1"} key={`dns-${pool?.id}`} mono />
-            <Field name="clientAllowedIps" label="AllowedIPs" value={pool?.clientAllowedIps || "0.0.0.0/0"} key={`allowed-${pool?.id}`} mono />
-            <Field name="persistentKeepalive" label="Persistent keepalive" value={String(pool?.persistentKeepalive ?? 25)} key={`keepalive-${pool?.id}`} type="number" />
-            <Field name="mtu" label="MTU" value={String(pool?.mtu ?? 1420)} key={`mtu-${pool?.id}`} type="number" />
-            <div className="form-group span-2"><div className="checkbox"><input id="psk" name="usePresharedKey" type="checkbox" /><label htmlFor="psk">Add a pre-shared key</label></div>{pool?.endpoint && <div className="hint">Endpoint from pool: <span className="mono">{pool.endpoint}</span></div>}</div>
           </div></fieldset>
+
+          <details className="advanced-settings">
+            <summary><span><strong>Advanced settings</strong><small>Client routing, DNS, endpoint, MTU, keepalive, and pre-shared key</small></span></summary>
+            <div className="form-grid advanced-settings-body">
+              <Field name="dnsServer" label="DNS" value={pool?.dns || "1.1.1.1"} key={`dns-${pool?.id}`} mono />
+              <Field name="clientAllowedIps" label="AllowedIPs" value={pool?.clientAllowedIps || "0.0.0.0/0"} key={`allowed-${pool?.id}`} mono />
+              <Field name="persistentKeepalive" label="Persistent keepalive" value={String(pool?.persistentKeepalive ?? 25)} key={`keepalive-${pool?.id}`} type="number" />
+              <Field name="mtu" label="MTU" value={String(pool?.mtu ?? 1420)} key={`mtu-${pool?.id}`} type="number" />
+              <Field name="endpointOverride" label="Endpoint override" placeholder="vpn.example.com" mono optional />
+              <Field name="endpointPortOverride" label="Endpoint port override" placeholder="13231" type="number" optional />
+              <div className="form-group span-2"><div className="checkbox"><input id="psk" name="usePresharedKey" type="checkbox" /><label htmlFor="psk">Add a pre-shared key</label></div>{pool?.endpoint && <div className="hint">Inherited endpoint: <span className="mono">{pool.endpoint}</span>. Overrides apply only to this peer.</div>}</div>
+            </div>
+          </details>
           {error && <div className="form-message form-message-error" role="alert">{error}</div>}
         </div>
         <footer className="dialog-footer"><button type="button" className="button" onClick={close}>Cancel</button><button className="button button-primary" disabled={loading || !pool}>{loading ? <LoaderCircle className="spin" /> : <Save />}{loading ? "Creating and verifying…" : "Create peer"}</button></footer>
@@ -90,7 +100,7 @@ export function PeerCreateDialog({ routers, interfaces, pools }: { routers: Rout
   </div>;
 }
 
-function Field({ name, label, value = "", placeholder, type = "text", mono = false }: { name: string; label: string; value?: string; placeholder?: string; type?: string; mono?: boolean }) {
+function Field({ name, label, value = "", placeholder, type = "text", mono = false, optional = false }: { name: string; label: string; value?: string; placeholder?: string; type?: string; mono?: boolean; optional?: boolean }) {
   const id = `peer-${name}`;
-  return <div className="form-group"><label className="label" htmlFor={id}>{label}</label><input id={id} className={`field ${mono ? "mono" : ""}`} name={name} defaultValue={value} placeholder={placeholder} type={type} required /></div>;
+  return <div className="form-group"><label className="label" htmlFor={id}>{label}{optional && <span className="hint"> (optional)</span>}</label><input id={id} className={`field ${mono ? "mono" : ""}`} name={name} defaultValue={value} placeholder={placeholder} type={type} required={!optional} /></div>;
 }
