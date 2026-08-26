@@ -1,8 +1,9 @@
 import type { PoolClient } from "pg";
 import { query,withTransaction } from "@/lib/db";
-import { allowedAddressOwnsIp,ipv4Range,ipv4ToNumber,normalizeClientIp,numberToIpv4,parseIpv4Cidr,suggestPoolFromInterfaceAddress,validatePoolRange,IpAllocationError } from "./ip-allocation";
+import { allowedAddressOwnsIp,cidrsOverlap,ipv4Range,ipv4ToNumber,normalizeClientIp,numberToIpv4,parseIpv4Cidr,suggestPoolFromInterfaceAddress,validatePoolRange,IpAllocationError } from "./ip-allocation";
 import type { RemoteWireGuardPeer } from "./routeros";
 import { compareIpAddresses } from "@/lib/ip-sort";
+import { clientForRouter,getRouter } from "./router-repository";
 
 export const MAX_POOL_ADDRESSES=65_536;
 
@@ -25,6 +26,7 @@ type InterfaceScope={id:string;router_id:string;name:string;addresses:string[];r
 
 export async function createPool(input:PoolInput){
   const normalized=normalizePoolInput(input);
+  await assertNoRouterNetworkOverlap(input.routerId,input.interfaceId,normalized.networkCidr,normalized.gatewayIp);
   return withTransaction(async db=>{
     await lockRouterScope(db,input.routerId);
     const scope=await interfaceScope(db,input.routerId,input.interfaceId);
@@ -45,6 +47,7 @@ export async function createPool(input:PoolInput){
 
 export async function updatePool(id:string,input:PoolInput){
   const normalized=normalizePoolInput(input);
+  await assertNoRouterNetworkOverlap(input.routerId,input.interfaceId,normalized.networkCidr,normalized.gatewayIp);
   return withTransaction(async db=>{
     const current=await lockPool(db,id);
     if(current.router_id!==input.routerId)throw new PoolConflictError("A pool cannot be moved to another router. Create a new pool instead.");
@@ -174,3 +177,25 @@ async function assertDatabaseAddressFree(db:PoolClient,pool:WireGuardPool,ip:str
 function validateAddressInPool(pool:WireGuardPool,value:string){const ip=normalizeClientIp(value);const number=ipv4ToNumber(ip);const range=ipv4Range(pool.start_ip,pool.end_ip);if(number<range.start||number>range.end)throw new PoolConflictError(`${ip} is outside ${pool.name} (${pool.start_ip} – ${pool.end_ip}).`);if(ip===normalizeClientIp(pool.gateway_ip))throw new PoolConflictError(`${ip} is the router/interface address.`);return ip}
 function conflictMessage(ip:string,owner:{peer?:string;router?:string;interface?:string}){return`Cannot use ${ip}\n\nThis address is already assigned to:\n\nPeer: ${owner.peer??"Unknown peer"}\nRouter: ${owner.router??"Unknown router"}\nInterface: ${owner.interface??"Unknown interface"}`}
 function addressView(row:{ip:string;state:string;comment:string|null;peer_name:string|null;origin:string|null}):AddressView{if(row.state==="allocated")return{ip:row.ip,state:row.origin==="imported"?"imported":"used",owner:row.peer_name,comment:row.comment};return{ip:row.ip,state:row.state as AddressView["state"],owner:row.state==="router"?"Router":null,comment:row.comment}}
+
+async function assertNoRouterNetworkOverlap(routerId:string,interfaceId:string,networkCidr:string,gatewayIp:string){
+  const router=await getRouter(routerId);const interfaceRow=(await query<{name:string}>("SELECT name FROM wireguard_interfaces WHERE id=$1 AND router_id=$2",[interfaceId,routerId])).rows[0];
+  if(!interfaceRow)throw new PoolConflictError("The selected WireGuard interface does not belong to this router.");
+  const client=clientForRouter(router);
+  try{
+    const[addresses,routes]=await Promise.all([client.getAddresses(),client.getRoutes()]);
+    for(const address of addresses){
+      if(address.disabled)continue;let observed;try{observed=parseIpv4Cidr(address.address)}catch{continue}
+      if(!cidrsOverlap(networkCidr,observed.cidr))continue;
+      const expected=address.interfaceName===interfaceRow.name&&observed.cidr===parseIpv4Cidr(networkCidr).cidr&&normalizeClientIp(address.address)===normalizeClientIp(gatewayIp);
+      if(!expected)throw new PoolConflictError(`Cannot safely create ${networkCidr}.\n\nThis network overlaps RouterOS address ${address.address} on ${address.interfaceName}.`);
+    }
+    for(const route of routes){
+      const destination=route["dst-address"]??route.dstAddress;if(!destination||destination==="0.0.0.0/0")continue;
+      let overlaps=false;try{overlaps=cidrsOverlap(networkCidr,destination)}catch{continue}if(!overlaps)continue;
+      const exact=parseIpv4Cidr(destination).cidr===parseIpv4Cidr(networkCidr).cidr;const gateway=route.gateway??route.interface??"unknown gateway";
+      const connectedToSelected=exact&&(gateway===interfaceRow.name||route["immediate-gw"]?.includes(interfaceRow.name));
+      if(!connectedToSelected)throw new PoolConflictError(`Cannot safely create ${networkCidr}.\n\nThis network overlaps RouterOS route ${destination} via ${gateway}.`);
+    }
+  }catch(error){if(error instanceof PoolConflictError)throw error;throw new PoolConflictError(`Cannot verify RouterOS networks before saving the pool: ${error instanceof Error?error.message:"router unavailable"}.`)}finally{await client.close()}
+}

@@ -16,6 +16,9 @@ export type RouterRow = {
   endpoint_ip: string | null;
   wireguard_port: number | null;
   enabled: boolean;
+  default_interface_id:string|null;default_pool_id:string|null;default_dns:string|null;default_client_allowed_ips:string|null;default_endpoint:string|null;
+  default_mtu:number|null;default_persistent_keepalive:number|null;default_quota_bytes:string|null;default_quota_period:"one_time"|"daily"|"weekly"|"monthly"|null;
+  default_bandwidth_mode:"global"|"unlimited"|"custom";default_download_bps:string|null;default_upload_bps:string|null;default_expiration_days:number|null;
 };
 
 export async function getRouter(id: string) {

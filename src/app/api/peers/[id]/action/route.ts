@@ -12,12 +12,12 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const { id } = await context.params;
   const input = schema.safeParse(await request.json().catch(() => null));
   if (!input.success) return fail("Unsupported peer action.", 422);
-  const auth = await requireUser(input.data.action === "delete" ? "delete" : "write");
+  const auth = await requireUser(input.data.action === "delete" ? "peer:delete" : input.data.action === "reset_usage" || input.data.action === "temporary_reenable" ? "traffic:reset" : "peer:disable");
   if (!auth.user) return fail(auth.error, auth.status);
   if (!(await validateCsrf(request))) return fail("Security token expired.", 403);
   try {
     let details: Record<string, unknown> | undefined;
-    if (input.data.action === "delete") { await deletePeer(id); details = { deletedPeerId: id }; }
+    if (input.data.action === "delete") { await deletePeer(id,auth.user.id); details = { deletedPeerId: id }; }
     else if (input.data.action === "reset_usage") details = await resetPeerQuotaUsage(id);
     else if (input.data.action === "temporary_reenable") details = await temporarilyReenablePeer(id, input.data.minutes);
     else await setPeerEnabled(id, input.data.action === "enable");

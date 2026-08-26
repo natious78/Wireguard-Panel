@@ -17,3 +17,10 @@ export async function getQuotaPolicy(): Promise<QuotaPolicy> {
       : DEFAULT_QUOTA_POLICY;
   } catch { return DEFAULT_QUOTA_POLICY; }
 }
+
+export type GlobalBandwidthDefaults={mode:"unlimited"|"custom";downloadBps:string|null;uploadBps:string|null};
+export async function getGlobalBandwidthDefaults():Promise<GlobalBandwidthDefaults>{
+  try{const result=await query<{value:GlobalBandwidthDefaults}>("SELECT value FROM settings WHERE key='bandwidth_defaults'");const value=result.rows[0]?.value;
+    return value?.mode==="custom"&&value.downloadBps&&value.uploadBps?value:{mode:"unlimited",downloadBps:null,uploadBps:null};
+  }catch{return{mode:"unlimited",downloadBps:null,uploadBps:null}}
+}

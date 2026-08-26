@@ -8,13 +8,14 @@ import { getPeerQr,refreshPeerQr } from "@/server/qr-service";
 function safeName(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "wireguard-peer"; }
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser("read");
+  const url=new URL(request.url);const download=url.searchParams.get("download")==="1";
+  const auth = await requireUser(download?"peer:download_config":"peer:view_config");
   if (!auth.user) return fail(auth.error, auth.status);
   const { id } = await context.params;
   try {
-    const url=new URL(request.url);const format=url.searchParams.get("format")==="svg"?"svg":"png";
-    const qr=await getPeerQr(id,format);const download=url.searchParams.get("download")==="1";
-    await audit({ user: auth.user, action: "qr_viewed", peerId: id, result: "success",details:{format} });
+    const format=url.searchParams.get("format")==="svg"?"svg":"png";
+    const qr=await getPeerQr(id,format);
+    await audit({ user: auth.user, action: download ? "protected_qr_downloaded" : "protected_qr_viewed", peerId: id, result: "success",details:{format} });
     return new Response(format==="png"?new Uint8Array(qr.body as Buffer):qr.body as string, {
       headers: {
         "Content-Type": qr.contentType, "Cache-Control": "private, no-store",
@@ -25,7 +26,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 }
 
 export async function POST(request:NextRequest,context:{params:Promise<{id:string}>}){
-  const auth=await requireUser("write");if(!auth.user)return fail(auth.error,auth.status);
+  const auth=await requireUser("peer:rotate_keys");if(!auth.user)return fail(auth.error,auth.status);
   if(!(await validateCsrf(request)))return fail("Security token expired.",403);const{id}=await context.params;
   try{await refreshPeerQr(id);await audit({user:auth.user,action:"qr_regenerated",peerId:id,result:"success"});return ok({id})}catch(error){return handleApiError(error)}
 }

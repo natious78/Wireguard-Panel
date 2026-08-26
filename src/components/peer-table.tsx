@@ -19,8 +19,8 @@ import { ConfirmationDialog } from "./confirmation-dialog";
 import { HandshakeActivity, QuotaUsage, StatusBadge } from "./ui";
 
 type QuotaPeriod = "one_time" | "daily" | "weekly" | "monthly";
-type ColumnKey = "status" | "name" | "comment" | "ip" | "router" | "interface" | "handshake" | "rx" | "tx" | "usage" | "limit" | "expires" | "actions";
-type PendingBulk = "disable" | "delete" | null;
+type ColumnKey = "status" | "name" | "comment" | "ip" | "router" | "interface" | "bandwidth" | "handshake" | "rx" | "tx" | "usage" | "limit" | "expires" | "actions";
+type PendingBulk = "disable" | "delete" | "bandwidth" | null;
 
 const columnOptions: { key: ColumnKey; label: string }[] = [
   { key: "status", label: "Status" },
@@ -29,6 +29,7 @@ const columnOptions: { key: ColumnKey; label: string }[] = [
   { key: "ip", label: "IP address" },
   { key: "router", label: "Router" },
   { key: "interface", label: "Interface" },
+  { key: "bandwidth", label: "Bandwidth" },
   { key: "handshake", label: "Last handshake" },
   { key: "rx", label: "RX" },
   { key: "tx", label: "TX" },
@@ -59,13 +60,16 @@ export type PeerTableRow = {
   quotaLimitBytes: string | null;
   quotaPeriod: QuotaPeriod | null;
   conflict_type: string | null;
+  bandwidth:string;bandwidthMode:string;bandwidthSource:string;bandwidthSyncState:string;
 };
 
 export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; sort: string; queryString: string }) {
   const router = useRouter();
   const [selected, setSelected] = useState<string[]>([]);
-  const [loading, setLoading] = useState<"enable" | "disable" | "delete" | null>(null);
+  const [loading, setLoading] = useState<"enable" | "disable" | "delete" | "bandwidth" | null>(null);
   const [pendingBulk, setPendingBulk] = useState<PendingBulk>(null);
+  const [bulkBandwidthMode,setBulkBandwidthMode]=useState<"default"|"unlimited"|"custom">("default");
+  const [bulkDownload,setBulkDownload]=useState("20");const[bulkUpload,setBulkUpload]=useState("10");
   const [error, setError] = useState("");
   const [columns, setColumns] = useState<Record<ColumnKey, boolean>>(defaultColumns);
   const all = rows.length > 0 && selected.length === rows.length;
@@ -93,7 +97,7 @@ export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; s
     try {
       const result = await api<{ failed: number }>("/api/peers/bulk", {
         method: "POST",
-        body: JSON.stringify({ ids: selected, action }),
+        body: JSON.stringify({ ids: selected, action, confirmed: action === "delete" }),
       });
       if (result.failed) {
         setError(`${result.failed} peer action${result.failed === 1 ? "" : "s"} failed because a router was unavailable or the peer changed remotely.`);
@@ -109,6 +113,8 @@ export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; s
     }
   }
 
+  async function runBulkBandwidth(){setLoading("bandwidth");setError("");try{const result=await api<{failed:number}>("/api/peers/bulk",{method:"POST",body:JSON.stringify({ids:selected,action:"bandwidth",confirmed:true,bandwidthMode:bulkBandwidthMode,downloadMbps:bulkBandwidthMode==="custom"?Number(bulkDownload):null,uploadMbps:bulkBandwidthMode==="custom"?Number(bulkUpload):null})});if(result.failed)setError(`${result.failed} bandwidth update${result.failed===1?"":"s"} failed; successful peers were kept and failures need attention.`);else setSelected([]);setPendingBulk(null);router.refresh()}catch(caught){setError(caught instanceof Error?caught.message:"Bulk bandwidth update failed")}finally{setLoading(null)}}
+
   return (
     <>
       <div className="peer-table-controls">
@@ -121,6 +127,7 @@ export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; s
               {loading === "enable" ? <LoaderCircle className="spin" /> : <Power />}Enable
             </button>
             <button className="button button-small" onClick={() => setPendingBulk("disable")} disabled={Boolean(loading)}><PowerOff />Disable</button>
+            <button className="button button-small" onClick={() => setPendingBulk("bandwidth")} disabled={Boolean(loading)}><Columns3 />Bandwidth</button>
             <button className="button button-small button-danger" onClick={() => setPendingBulk("delete")} disabled={Boolean(loading)}><Trash2 />Delete</button>
           </div>
         )}
@@ -153,6 +160,7 @@ export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; s
             {columns.ip && <SortTh label="IP address" field="ip" sort={sort} queryString={queryString} />}
             {columns.router && <SortTh label="Router" field="router" sort={sort} queryString={queryString} />}
             {columns.interface && <th>Interface</th>}
+            {columns.bandwidth && <SortTh label="Bandwidth" field="bandwidth" sort={sort} queryString={queryString} />}
             {columns.handshake && <SortTh label="Last handshake" field="handshake" sort={sort} queryString={queryString} />}
             {columns.rx && <SortTh label="RX" field="rx" sort={sort} queryString={queryString} />}
             {columns.tx && <SortTh label="TX" field="tx" sort={sort} queryString={queryString} />}
@@ -170,6 +178,7 @@ export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; s
               {columns.ip && <td className="mono">{peer.client_ip || "—"}</td>}
               {columns.router && <td>{peer.router_name}</td>}
               {columns.interface && <td>{peer.interface_name}</td>}
+              {columns.bandwidth && <td><strong>{peer.bandwidth}</strong><div className="cell-sub">{peer.bandwidthSource.replaceAll("_"," ")} · {peer.bandwidthSyncState.replaceAll("_"," ")}</div></td>}
               {columns.handshake && <td><HandshakeActivity at={peer.last_handshake_at} status={peer.status} /></td>}
               {columns.rx && <td className="mono numeric-cell">{peer.rx}</td>}
               {columns.tx && <td className="mono numeric-cell">{peer.tx}</td>}
@@ -195,6 +204,7 @@ export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; s
               <div><dt>Router / interface</dt><dd>{peer.router_name} / {peer.interface_name}</dd></div>
               <div><dt>Last handshake</dt><dd><HandshakeActivity at={peer.last_handshake_at} status={peer.status} /></dd></div>
               <div><dt>Current usage</dt><dd>{peer.currentUsage}</dd></div>
+              <div><dt>Bandwidth</dt><dd>{peer.bandwidth}</dd></div>
             </dl>
             <QuotaUsage usedBytes={peer.periodUsageBytes} limitBytes={peer.quotaLimitBytes} period={peer.quotaPeriod} />
             <details className="peer-mobile-secondary">
@@ -213,17 +223,17 @@ export function PeerTable({ rows, sort, queryString }: { rows: PeerTableRow[]; s
 
       {pendingBulk && (
         <ConfirmationDialog
-          title={pendingBulk === "delete" ? `Delete ${selected.length} selected peers?` : `Disable ${selected.length} selected peers?`}
+          title={pendingBulk === "delete" ? `Delete ${selected.length} selected peers?` : pendingBulk==="bandwidth"?`Change bandwidth for ${selected.length} peers?`:`Disable ${selected.length} selected peers?`}
           description={pendingBulk === "delete"
             ? "Each peer will be removed from its MikroTik router before its local record and allocated pool address are released."
-            : "The selected peers will stop connecting, but their keys, history, and assigned IP addresses will be retained."}
-          details={<p>Routers that cannot be reached will cause that peer action to fail safely; affected local records will remain intact.</p>}
-          confirmLabel={pendingBulk === "delete" ? "Delete peers" : "Disable peers"}
+            : pendingBulk==="bandwidth"?"Each peer is updated and verified independently. Partial failures are reported exactly.":"The selected peers will stop connecting, but their keys, history, and assigned IP addresses will be retained."}
+          details={pendingBulk==="bandwidth"?<div className="form"><label className="form-group"><span className="label">New policy</span><select className="field" value={bulkBandwidthMode} onChange={event=>setBulkBandwidthMode(event.target.value as typeof bulkBandwidthMode)}><option value="default">Return to default</option><option value="unlimited">Unlimited</option><option value="custom">Custom</option></select></label>{bulkBandwidthMode==="custom"&&<div className="form-grid"><label className="form-group"><span className="label">Download Mbps</span><input className="field" value={bulkDownload} onChange={event=>setBulkDownload(event.target.value)} type="number" min="0.001"/></label><label className="form-group"><span className="label">Upload Mbps</span><input className="field" value={bulkUpload} onChange={event=>setBulkUpload(event.target.value)} type="number" min="0.001"/></label></div>}<div className="change-preview"><strong>Planned RouterOS changes</strong><span>{selected.length} peer policies and up to {selected.length} application-owned Simple Queues will be verified.</span></div></div>:<p>Routers that cannot be reached will cause that peer action to fail safely; affected local records will remain intact.</p>}
+          confirmLabel={pendingBulk === "delete" ? "Delete peers" : pendingBulk==="bandwidth"?"Apply bandwidth":"Disable peers"}
           tone={pendingBulk === "delete" ? "danger" : "warning"}
           loading={loading === pendingBulk}
           error={error}
           onCancel={() => { setPendingBulk(null); setError(""); }}
-          onConfirm={() => runBulk(pendingBulk)}
+          onConfirm={() => pendingBulk==="bandwidth"?runBulkBandwidth():runBulk(pendingBulk)}
         />
       )}
     </>

@@ -10,7 +10,7 @@ const integration=process.env.POOL_INTEGRATION==="true"?describe:describe.skip;
 integration("transactional WireGuard pool lifecycle",()=>{
   let routerId="",interfaceId="",poolId="",userId="",externalId="";const peerIds:string[]=[];
   beforeAll(async()=>{
-    const user=await query<{id:string}>("INSERT INTO users(username,password_hash,role) VALUES($1,'test','admin') RETURNING id",[`ipam-${Date.now()}`]);userId=user.rows[0].id;
+    const user=await query<{id:string}>("INSERT INTO users(username,password_hash,role) VALUES($1,'test','super_admin') RETURNING id",[`ipam-${Date.now()}`]);userId=user.rows[0].id;
     const router=await query<{id:string}>(`INSERT INTO routers(name,management_ip,api_port,api_type,use_tls,verify_tls,username_encrypted,password_encrypted,endpoint_ip,wireguard_port)
       VALUES($1,'127.0.0.1',8728,'native',false,true,$2,$3,'vpn.example.test',51820) RETURNING id`,[`IPAM ${Date.now()}`,encryptSecret("test"),encryptSecret("test")]);routerId=router.rows[0].id;
     const keys=generateWireGuardKeys();const iface=await query<{id:string}>(`INSERT INTO wireguard_interfaces(router_id,remote_id,name,listen_port,mtu,public_key,running,addresses)
@@ -25,8 +25,8 @@ integration("transactional WireGuard pool lifecycle",()=>{
     const[first,second]=await Promise.all([make("Concurrent A"),make("Concurrent B")]);peerIds.push(first.id,second.id);
     expect(new Set([first.clientIp,second.clientIp])).toEqual(new Set(["10.77.0.4","10.77.0.5"]));
     const stats=await getPoolStats(poolId);expect(stats).toEqual({total:5,used:2,reserved:1,available:2});
-    const stored=await query<{pool_id:string;qr_png_encrypted:string|null;qr_svg_encrypted:string|null}>("SELECT pool_id,qr_png_encrypted,qr_svg_encrypted FROM peers WHERE id=ANY($1::uuid[]) ORDER BY client_ip",[peerIds]);
-    expect(stored.rows.every(row=>row.pool_id===poolId&&row.qr_png_encrypted&&row.qr_svg_encrypted)).toBe(true);
+    const stored=await query<{pool_id:string;qr_config_hash:string|null;qr_png_encrypted:string|null;qr_svg_encrypted:string|null}>("SELECT pool_id,qr_config_hash,qr_png_encrypted,qr_svg_encrypted FROM peers WHERE id=ANY($1::uuid[]) ORDER BY client_ip",[peerIds]);
+    expect(stored.rows.every(row=>row.pool_id===poolId&&row.qr_config_hash&&row.qr_png_encrypted===null&&row.qr_svg_encrypted===null)).toBe(true);
   });
   it("reports the live MikroTik owner for a conflicting manual IP",async()=>{
     await expect(createPeer({routerId,interfaceId,poolId,assignmentMode:"manual",requestedIp:"10.77.0.3",name:"Conflict",userId})).rejects.toThrow(/Existing MikroTik Peer/);

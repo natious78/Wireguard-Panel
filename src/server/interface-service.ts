@@ -27,9 +27,10 @@ export async function updateInterface(id: string, input: InterfaceInput) {
     if (!updated) throw new Error("RouterOS did not return the interface during verification.");
     await query(
       `UPDATE wireguard_interfaces SET name=$2,listen_port=$3,mtu=$4,disabled=$5,client_pool_start=$6,
-       client_pool_end=$7,default_dns=$8,default_allowed_ips=$9,remote_fingerprint=$10,updated_at=now() WHERE id=$1`,
+       client_pool_end=$7,default_dns=$8,default_allowed_ips=$9,remote_fingerprint=$10,desired_state=$11,last_applied_state=$11,last_remote_state=$11,
+       sync_state='synced',updated_at=now() WHERE id=$1`,
       [id,input.name,input.listenPort,input.mtu,input.disabled,input.clientPoolStart || null,input.clientPoolEnd || null,
-        input.defaultDns,input.defaultAllowedIps,remoteInterfaceFingerprint(updated)],
+        input.defaultDns,input.defaultAllowedIps,remoteInterfaceFingerprint(updated),JSON.stringify(interfaceState(updated))],
     );
   } finally { await client.close(); }
 }
@@ -44,10 +45,10 @@ export async function createInterface(routerId: string, input: InterfaceInput) {
     if (!remote) throw new Error("RouterOS created the interface but did not return it during verification.");
     const result = await query<{ id: string }>(
       `INSERT INTO wireguard_interfaces(router_id,remote_id,name,listen_port,mtu,public_key,running,disabled,
-       client_pool_start,client_pool_end,default_dns,default_allowed_ips,remote_fingerprint)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+       client_pool_start,client_pool_end,default_dns,default_allowed_ips,remote_fingerprint,desired_state,last_applied_state,last_remote_state,sync_state)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$14,'synced') RETURNING id`,
       [routerId,remote.id,remote.name,remote.listenPort,remote.mtu,remote.publicKey,remote.running,remote.disabled,
-        input.clientPoolStart || null,input.clientPoolEnd || null,input.defaultDns,input.defaultAllowedIps,remoteInterfaceFingerprint(remote)],
+        input.clientPoolStart || null,input.clientPoolEnd || null,input.defaultDns,input.defaultAllowedIps,remoteInterfaceFingerprint(remote),JSON.stringify(interfaceState(remote))],
     );
     return result.rows[0].id;
   } catch (error) {
@@ -57,6 +58,7 @@ export async function createInterface(routerId: string, input: InterfaceInput) {
     throw error;
   } finally { await client.close(); }
 }
+function interfaceState(item:{name:string;listenPort:number;mtu:number;publicKey:string;disabled:boolean}){return{name:item.name,listenPort:item.listenPort,mtu:item.mtu,publicKey:item.publicKey,disabled:item.disabled}}
 
 async function getInterface(id: string) {
   const result = await query<InterfaceRow>("SELECT id,router_id,remote_id,remote_fingerprint FROM wireguard_interfaces WHERE id=$1", [id]);

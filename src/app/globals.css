@@ -421,3 +421,42 @@ th.peer-col-actions { z-index: 7; background: var(--surface-2); }
   .peer-primary-actions .button { width: 100%; }
   .status-overview-grid { grid-template-columns: 1fr; }
 }
+
+.button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.drift-list { display: grid; gap: 12px; }
+.drift-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; background: var(--surface-2); }
+.drift-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+.compact-table th, .compact-table td { padding: 8px 10px; font-size: 12px; }
+.cell-danger { color: var(--danger); max-width: 440px; }
+.empty-inline { display: flex; align-items: center; gap: 9px; color: var(--muted); padding: 18px 0; }
+.input-suffix { display: grid; place-items: center; min-width: 72px; color: var(--muted); background: var(--surface-2); }
+.change-preview { display: grid; gap: 4px; margin: 12px 0; padding: 12px 14px; border: 1px solid var(--warning-border); border-radius: var(--radius-md); background: var(--warning-soft); }
+.change-preview span { color: var(--muted); font-size: 13px; }
+.segmented-control { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); margin-bottom: 14px; }
+.segmented-control button { border: 0; border-radius: 7px; padding: 8px 12px; color: var(--muted); background: transparent; cursor: pointer; }
+.segmented-control button.active { color: var(--text); background: var(--surface); box-shadow: var(--shadow-sm); }
+.profile-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 10px; }
+.profile-card { min-height: 128px; display: grid; align-content: space-between; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
+.profile-card p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.profile-card dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; }
+.profile-card dt { color: var(--muted); }.profile-card dd { text-align: right; }
+.policy-value { font-weight: 700; color: var(--primary); }
+.profile-create { margin-top: 14px; }
+.effective-source { display: flex; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid var(--primary-border); border-radius: var(--radius-md); background: var(--primary-soft); }
+.effective-source span { color: var(--muted); font-size: 12px; }
+.effective-preview { padding: 15px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
+.effective-preview h3 { margin-bottom: 10px; font-size: 14px; }
+.effective-preview dl { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; }
+.effective-preview dl > div { min-width: 0; }.effective-preview dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }.effective-preview dd { margin-top: 3px; font-weight: 600; overflow-wrap: anywhere; }.effective-preview dd span { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+@media (max-width: 760px) { .effective-preview dl { grid-template-columns: 1fr 1fr; }.effective-source { align-items: flex-start; flex-direction: column; } }
+.bandwidth-card { margin-top: 16px; }.bandwidth-card h2 { display: flex; align-items: center; gap: 8px; }
+.bandwidth-facts { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; }
+.bandwidth-facts > div { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
+.bandwidth-facts span,.bandwidth-facts small { color: var(--muted); font-size: 11px; }.bandwidth-facts strong { font-size: 16px; }
+.bandwidth-editor { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+@media (max-width: 760px) { .bandwidth-facts { grid-template-columns: 1fr 1fr; } }
+.file-button { position: relative; width: max-content; overflow: hidden; }
+.file-button input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.bulk-csv { width: 100%; min-height: 250px; resize: vertical; margin-top: 10px; }
+.field-compact { min-width: 130px; padding: 7px 9px; }
+.user-sort-links { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin-bottom: 12px; }

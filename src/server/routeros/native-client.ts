@@ -4,16 +4,23 @@ import { normalizeInterface, normalizePeer, rosBoolean, versionSupportsWireGuard
 import type {
   CreateRemoteInterface,
   CreateRemotePeer,
+  CreateRemoteSimpleQueue,
   RemoteAddress,
   RemoteNatRule,
+  RemoteMangleRule,
+  RemoteFilterRule,
+  RemoteQueueTree,
+  RemoteSimpleQueue,
   RemoteRoute,
   RemoteWireGuardInterface,
   RemoteWireGuardPeer,
   RouterConnectionOptions,
   RouterFacts,
+  RouterClock,
   RouterOsClient,
   UpdateRemoteInterface,
   UpdateRemotePeer,
+  UpdateRemoteSimpleQueue,
 } from "./types";
 import { RouterConnectionError } from "./types";
 
@@ -51,6 +58,11 @@ export class NativeRouterOsClient implements RouterOsClient {
     return facts;
   }
 
+  async getClock(): Promise<RouterClock> {
+    const row=(await this.command("/system/clock/print"))[0]??{};
+    return {date:row.date??"",time:row.time??"",timeZoneName:row["time-zone-name"]??null};
+  }
+
   async getInterfaces(): Promise<RemoteWireGuardInterface[]> { return (await this.command("/interface/wireguard/print")).map(normalizeInterface); }
   async getPeers(): Promise<RemoteWireGuardPeer[]> { const observedAt=new Date();return (await this.command("/interface/wireguard/peers/print")).map(row=>normalizePeer(row,observedAt)); }
   async getAddresses(): Promise<RemoteAddress[]> {
@@ -60,6 +72,10 @@ export class NativeRouterOsClient implements RouterOsClient {
   }
   getRoutes(): Promise<RemoteRoute[]> { return this.command("/ip/route/print"); }
   getNatRules(): Promise<RemoteNatRule[]> { return this.command("/ip/firewall/nat/print"); }
+  async getSimpleQueues():Promise<RemoteSimpleQueue[]>{return(await this.command("/queue/simple/print")).map(normalizeSimpleQueue)}
+  getQueueTrees():Promise<RemoteQueueTree[]>{return this.command("/queue/tree/print")}
+  getMangleRules():Promise<RemoteMangleRule[]>{return this.command("/ip/firewall/mangle/print")}
+  getFilterRules():Promise<RemoteFilterRule[]>{return this.command("/ip/firewall/filter/print")}
 
   async createPeer(peer: CreateRemotePeer) {
     const result = await this.command("/interface/wireguard/peers/add", toNativePeer(peer));
@@ -76,6 +92,9 @@ export class NativeRouterOsClient implements RouterOsClient {
   async updateInterface(id: string, input: UpdateRemoteInterface) {
     await this.command("/interface/wireguard/set", { ".id": id, ...toNativeInterface(input) });
   }
+  async createSimpleQueue(input:CreateRemoteSimpleQueue){const result=await this.command("/queue/simple/add",toNativeSimpleQueue(input));return result[0]?.ret??result[0]?.[".id"]??""}
+  async updateSimpleQueue(id:string,input:UpdateRemoteSimpleQueue){await this.command("/queue/simple/set",{".id":id,...toNativeSimpleQueue(input)})}
+  async deleteSimpleQueue(id:string){await this.command("/queue/simple/remove",{".id":id})}
   async close() {}
 }
 
@@ -216,3 +235,5 @@ function toNativePeer(peer: CreateRemotePeer | UpdateRemotePeer) {
 function toNativeInterface(input: CreateRemoteInterface | UpdateRemoteInterface) {
   return { name: input.name, "listen-port": input.listenPort, mtu: input.mtu, disabled: input.disabled };
 }
+function toNativeSimpleQueue(input:CreateRemoteSimpleQueue|UpdateRemoteSimpleQueue){return{name:input.name,target:input.target,"max-limit":input.maxLimit,comment:input.comment,disabled:input.disabled,"burst-limit":input.burstLimit,"burst-threshold":input.burstThreshold,"burst-time":input.burstTime}}
+function normalizeSimpleQueue(row:Record<string,string>):RemoteSimpleQueue{return{id:row[".id"]??"",name:row.name??"",target:row.target??row["target-addresses"]??"",maxLimit:row["max-limit"]??"0/0",burstLimit:row["burst-limit"]??"0/0",burstThreshold:row["burst-threshold"]??"0/0",burstTime:row["burst-time"]??"0s/0s",disabled:rosBoolean(row.disabled),comment:row.comment??"",dynamic:rosBoolean(row.dynamic),invalid:rosBoolean(row.invalid)}}

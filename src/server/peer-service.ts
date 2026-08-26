@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { query, withTransaction } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "@/lib/security";
 import { clientForRouter, getRouter } from "./router-repository";
@@ -8,6 +9,8 @@ import { quotaPeriodWindow, type QuotaPeriod } from "./quota";
 import { getQuotaPolicy } from "./settings";
 import { choosePoolAddress,claimPoolAddress,lockPoolForPeer,releasePeerPoolAddress,type WireGuardPool } from "./pool-service";
 import { generateQrAssets,refreshPeerQr } from "./qr-service";
+import { applyPeerBandwidthRemote, deleteOwnedPeerQueueRemote, getEffectivePeerBandwidth, persistBandwidthResult } from "./bandwidth-service";
+import { failOperation, finishOperation, operationStep, startOperation } from "./operations";
 
 export class ReconciliationConflictError extends Error {
   constructor(message: string, public readonly observed?: unknown) { super(message); this.name = "ReconciliationConflictError"; }
@@ -32,6 +35,14 @@ export type CreatePeerInput = {
   usePresharedKey?: boolean;
   quotaBytes?: bigint | null;
   quotaPeriod?: QuotaPeriod | null;
+  profileId?: string | null;
+  bandwidthMode?: "default" | "unlimited" | "custom" | "profile";
+  bandwidthProfileId?: string | null;
+  downloadLimitBps?: bigint | null;
+  uploadLimitBps?: bigint | null;
+  burstDownloadBps?: bigint | null;
+  burstUploadBps?: bigint | null;
+  burstTimeSeconds?: number | null;
   userId: string;
 };
 
@@ -41,27 +52,24 @@ type InterfaceRow = {
 };
 
 export async function createPeer(input: CreatePeerInput) {
+  const peerId = randomUUID();
+  const operationId = await startOperation({ type: "peer_create", routerId: input.routerId, userId: input.userId, context: { peerId, name: input.name } });
   const router = await getRouter(input.routerId);
   const interfaceResult = await query<InterfaceRow>("SELECT * FROM wireguard_interfaces WHERE id=$1 AND router_id=$2", [input.interfaceId, input.routerId]);
   const wgInterface = interfaceResult.rows[0];
   if (!wgInterface) throw new Error("WireGuard interface not found on the selected router.");
   const client = clientForRouter(router);
   let remoteId: string | null = null;
+  let staged = false;
   const orphan:{ip:string|null;pool:WireGuardPool|null}={ip:null,pool:null};
   try {
-    const inserted = await withTransaction(async (db) => {
+    const stagedPeer = await withTransaction(async (db) => {
       const pool=await lockPoolForPeer(db,input.poolId,input.routerId,input.interfaceId);orphan.pool=pool;
       const requested=input.assignmentMode==="manual"?input.requestedIp:undefined;
-      await choosePoolAddress(db,pool,[],requested);
       const remotePeers=await client.getPeers();
       const clientIp=await choosePoolAddress(db,pool,remotePeers,requested);orphan.ip=clientIp;
       const keys = generateWireGuardKeys(input.usePresharedKey);
       const allowedAddress = `${clientIp}/32`;
-      remoteId = await client.createPeer({interfaceName:wgInterface.name,publicKey:keys.publicKey,allowedAddress,comment:input.description||"",
-        persistentKeepalive:input.persistentKeepalive??pool.persistent_keepalive,presharedKey:keys.presharedKey??undefined});
-      const remote=(await client.getPeers()).find(peer=>peer.id===remoteId||peer.publicKey===keys.publicKey);
-      if(!remote)throw new Error("RouterOS created the peer but did not return it during verification.");
-      const fingerprint=remotePeerFingerprint(remote);
       const quotaWindow=input.quotaBytes&&input.quotaPeriod?quotaPeriodWindow(new Date(),input.quotaPeriod,await getQuotaPolicy()):null;
       const endpointHost=input.endpointOverride||pool.endpoint_host||router.endpoint_hostname||router.endpoint_ip||router.management_ip;
       const endpointPort=input.endpointPortOverride||pool.endpoint_port||router.wireguard_port||wgInterface.listen_port;
@@ -70,35 +78,73 @@ export async function createPeer(input: CreatePeerInput) {
       const config=generateClientConfig({privateKey:keys.privateKey,clientIp,dns,serverPublicKey:wgInterface.public_key,presharedKey:keys.presharedKey,
         allowedIps:clientAllowed,endpointHost,endpointPort,persistentKeepalive:keepalive,mtu});
       const qr=await generateQrAssets(config);
-      const result = await db.query<{ id: string }>(
-        `INSERT INTO peers(router_id, interface_id, remote_id, name, description, origin, public_key,
+      await db.query(
+        `INSERT INTO peers(id,router_id, interface_id, remote_id, name, description, origin, public_key,
           private_key_encrypted, preshared_key_encrypted, client_ip, allowed_address, client_allowed_ips,
-          dns_server, persistent_keepalive, mtu, expires_at, remote_fingerprint, last_remote_state, last_synced_at, created_by,
+          dns_server, persistent_keepalive, mtu, expires_at, created_by,
           quota_limit_bytes,quota_period,quota_period_started_at,quota_period_ends_at,
-          last_observed_rx_bytes,last_observed_tx_bytes,last_counter_observed_at,pool_id,endpoint_override,endpoint_port_override,
-          remote_disabled,last_statistics_poll_at,last_handshake_raw,last_handshake_parse_valid,
-          qr_config_hash,qr_png_encrypted,qr_svg_encrypted,qr_generated_at)
-         VALUES($1,$2,$3,$4,$5,'managed',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),$18,$19,$20,$21,$22,$23,$24,now(),
-          $25,$26,$27,$28,now(),$29,$30,$31,$32,$33,now()) RETURNING id`,
-        [router.id, wgInterface.id, remote.id, input.name, input.description || null, keys.publicKey,
+          pool_id,endpoint_override,endpoint_port_override,remote_disabled,last_handshake_parse_valid,
+          qr_config_hash,qr_png_encrypted,qr_svg_encrypted,qr_generated_at,profile_id,bandwidth_mode,bandwidth_profile_id,
+          download_limit_bps,upload_limit_bps,burst_download_bps,burst_upload_bps,burst_time_seconds,
+          lifecycle_status,sync_state,desired_state)
+         VALUES($1,$2,$3,NULL,$4,$5,'managed',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+          false,true,$24,$25,$26,now(),$27,$28,$29,$30,$31,$32,$33,$34,'creating','pending',$35)`,
+        [peerId,router.id, wgInterface.id, input.name, input.description || null, keys.publicKey,
           encryptSecret(keys.privateKey), keys.presharedKey ? encryptSecret(keys.presharedKey) : null,
           clientIp, allowedAddress, clientAllowed,dns,keepalive,mtu,
-          input.expiresAt ?? null, fingerprint, JSON.stringify({ ...remote, rxBytes: remote.rxBytes.toString(), txBytes: remote.txBytes.toString() }), input.userId,
+          input.expiresAt ?? null,input.userId,
           input.quotaBytes?.toString() ?? null, input.quotaBytes ? input.quotaPeriod : null, quotaWindow?.start ?? null, quotaWindow?.end ?? null,
-          remote.rxBytes.toString(), remote.txBytes.toString(),pool.id,input.endpointOverride||null,input.endpointPortOverride||null,remote.disabled,remote.lastHandshakeRaw,
-          remote.lastHandshakeParseValid,qr.hash,qr.pngEncrypted,qr.svgEncrypted],
+          pool.id,input.endpointOverride||null,input.endpointPortOverride||null,qr.hash,qr.pngEncrypted,qr.svgEncrypted,
+          input.profileId??null,input.bandwidthMode??"default",input.bandwidthProfileId??null,input.downloadLimitBps?.toString()??null,
+          input.uploadLimitBps?.toString()??null,input.burstDownloadBps?.toString()??null,input.burstUploadBps?.toString()??null,
+          input.burstTimeSeconds??null,JSON.stringify({interfaceName:wgInterface.name,allowedAddress,comment:input.description||"",persistentKeepalive:keepalive,disabled:false})],
       );
-      await claimPoolAddress(db,pool,clientIp,result.rows[0].id,input.name);
-      return result.rows[0].id;
+      await claimPoolAddress(db,pool,clientIp,peerId,input.name);
+      await db.query("UPDATE management_operations SET peer_id=$2,updated_at=now() WHERE id=$1", [operationId, peerId]);
+      return { clientIp, keys, allowedAddress, keepalive };
     });
-    return { id: inserted, clientIp:orphan.ip!,poolId:input.poolId };
+    staged = true;
+    await operationStep(operationId, "database_allocation", "succeeded", { clientIp: stagedPeer.clientIp, poolId: input.poolId });
+
+    // Re-check RouterOS immediately before creation. The database lock prevents application races;
+    // this second read also catches peers created directly on the router after the first check.
+    const latestRemotePeers = await client.getPeers();
+    await withTransaction(async (db) => {
+      const pool = await lockPoolForPeer(db, input.poolId, input.routerId, input.interfaceId);
+      await choosePoolAddress(db, pool, latestRemotePeers, stagedPeer.clientIp, peerId);
+    });
+    remoteId = await client.createPeer({interfaceName:wgInterface.name,publicKey:stagedPeer.keys.publicKey,allowedAddress:stagedPeer.allowedAddress,
+      comment:input.description||"",persistentKeepalive:stagedPeer.keepalive,presharedKey:stagedPeer.keys.presharedKey??undefined});
+    const remote=(await client.getPeers()).find(peer=>peer.id===remoteId||peer.publicKey===stagedPeer.keys.publicKey);
+    if(!remote)throw new Error("RouterOS created the peer but did not return it during verification.");
+    await query(`UPDATE peers SET remote_id=$2,remote_fingerprint=$3,last_remote_state=$4,last_synced_at=now(),
+      last_observed_rx_bytes=$5,last_observed_tx_bytes=$6,last_counter_observed_at=now(),remote_disabled=$7,
+      last_statistics_poll_at=now(),last_handshake_raw=$8,last_handshake_parse_valid=$9,updated_at=now() WHERE id=$1`,
+      [peerId,remote.id,remotePeerFingerprint(remote),JSON.stringify({...remote,rxBytes:remote.rxBytes.toString(),txBytes:remote.txBytes.toString()}),
+        remote.rxBytes.toString(),remote.txBytes.toString(),remote.disabled,remote.lastHandshakeRaw,remote.lastHandshakeParseValid]);
+    await operationStep(operationId, "router_peer", "succeeded", { remoteId: remote.id });
+
+    const policy = await getEffectivePeerBandwidth(peerId);
+    const bandwidth = await applyPeerBandwidthRemote(client, { id: peerId, name: input.name, clientIp: stagedPeer.clientIp }, policy);
+    await persistBandwidthResult(undefined, router.id, peerId, policy, bandwidth);
+    await operationStep(operationId, "bandwidth", "succeeded", { action: bandwidth.action, source: policy.source });
+    await query("UPDATE peers SET lifecycle_status='active',sync_state='synced',last_applied_state=desired_state,updated_at=now() WHERE id=$1", [peerId]);
+    await finishOperation(operationId, "completed", { remoteId: remote.id, clientIp: stagedPeer.clientIp });
+    return { id: peerId, clientIp:stagedPeer.clientIp,poolId:input.poolId };
   } catch (error) {
+    const cleanupErrors: string[] = [];
     if (remoteId) {
-      const removed=await client.deletePeer(remoteId).then(()=>true).catch(()=>false);
-      if(!removed&&orphan.pool&&orphan.ip)await query(`INSERT INTO wireguard_pool_addresses(pool_id,router_id,interface_id,ip_address,state,comment)
-        VALUES($1,$2,$3,$4::inet,'reserved','Orphaned RouterOS peer; synchronize before reuse') ON CONFLICT(router_id,ip_address) DO NOTHING`,
-        [orphan.pool.id,orphan.pool.router_id,orphan.pool.interface_id,orphan.ip]).catch(()=>undefined);
+      await deleteOwnedPeerQueueRemote(client, peerId).catch((cleanupError) => cleanupErrors.push(`queue: ${cleanupError instanceof Error ? cleanupError.message : "cleanup failed"}`));
+      await client.deletePeer(remoteId).catch((cleanupError) => cleanupErrors.push(`peer: ${cleanupError instanceof Error ? cleanupError.message : "cleanup failed"}`));
+      const stillRemote = await client.getPeers().then((peers) => peers.some((peer) => peer.id === remoteId)).catch(() => true);
+      if (stillRemote) cleanupErrors.push("peer: deletion could not be verified");
     }
+    if (staged && cleanupErrors.length === 0) {
+      await withTransaction(async (db) => { await releasePeerPoolAddress(db, peerId); await db.query("DELETE FROM peers WHERE id=$1", [peerId]); });
+    } else if (staged) {
+      await query("UPDATE peers SET lifecycle_status='pending_cleanup',sync_state='error',bandwidth_sync_state='pending_cleanup',updated_at=now() WHERE id=$1", [peerId]).catch(() => undefined);
+    }
+    await failOperation(operationId,error,cleanupErrors.length?"pending_cleanup":"failed",{peerId,remoteId,clientIp:orphan.ip,cleanupErrors}).catch(()=>undefined);
     throw error;
   } finally {
     await client.close();
@@ -158,14 +204,47 @@ export async function setPeerEnabled(peerId: string, enabled: boolean, reason: "
   } finally { await client.close(); }
 }
 
-export async function deletePeer(peerId: string) {
+export async function deletePeer(peerId: string, userId?: string) {
   const row = await mutablePeer(peerId);
+  const operationId = await startOperation({ type: "peer_delete", routerId: row.router_id, peerId, userId: userId ?? null, context: { name: row.name, clientIp: row.client_ip } });
   const router = await getRouter(row.router_id);
   const client = clientForRouter(router);
+  let remoteDeleted = false;
   try {
     const remote = await assertCurrentRemote(client, row);
+    await query("UPDATE peers SET lifecycle_status='pending_cleanup',updated_at=now() WHERE id=$1", [peerId]);
     await client.deletePeer(remote.id);
-    await withTransaction(async db=>{await releasePeerPoolAddress(db,peerId);await db.query("DELETE FROM peers WHERE id=$1",[peerId])});
+    remoteDeleted = true;
+    const stillExists = (await client.getPeers()).some((peer) => peer.id === remote.id || peer.publicKey === row.public_key);
+    if (stillExists) throw new Error("RouterOS reported success but the peer still exists.");
+    await operationStep(operationId, "router_peer", "succeeded", { remoteId: remote.id });
+    const queuesRemoved = await deleteOwnedPeerQueueRemote(client, peerId);
+    await operationStep(operationId, "bandwidth_cleanup", "succeeded", { queuesRemoved });
+    await withTransaction(async db=>{
+      const history = await db.query<{ quota_history: unknown }>(
+        "SELECT COALESCE(jsonb_agg(to_jsonb(q) ORDER BY q.period_started_at),'[]'::jsonb) quota_history FROM quota_period_history q WHERE q.peer_id=$1",
+        [peerId],
+      );
+      await db.query(
+        `INSERT INTO peer_archives(peer_id,router_id,interface_id,pool_id,name,description,client_ip,created_at,lifetime_rx_bytes,lifetime_tx_bytes,quota_history,deletion_details)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [row.id,row.router_id,row.interface_id,row.pool_id,row.name,row.description,row.client_ip,row.created_at,
+          row.lifetime_rx_bytes,row.lifetime_tx_bytes,JSON.stringify(history.rows[0]?.quota_history??[]),JSON.stringify({remoteId:remote.id,queuesRemoved})],
+      );
+      await releasePeerPoolAddress(db,peerId);
+      await db.query("DELETE FROM managed_router_objects WHERE peer_id=$1", [peerId]);
+      await db.query("DELETE FROM peers WHERE id=$1",[peerId]);
+    });
+    await finishOperation(operationId, "completed", { remoteId: remote.id, queuesRemoved });
+  } catch (error) {
+    if (remoteDeleted) {
+      await query("UPDATE peers SET lifecycle_status='pending_cleanup',sync_state='error',bandwidth_sync_state='pending_cleanup',updated_at=now() WHERE id=$1", [peerId]).catch(() => undefined);
+      await failOperation(operationId, error, "pending_cleanup", { remotePeerDeleted: true }).catch(() => undefined);
+    } else {
+      await query("UPDATE peers SET lifecycle_status='active',updated_at=now() WHERE id=$1", [peerId]).catch(() => undefined);
+      await failOperation(operationId, error, "failed").catch(() => undefined);
+    }
+    throw error;
   } finally { await client.close(); }
 }
 
@@ -186,10 +265,20 @@ export type UpdatePeerInput = {
   endpointPortOverride?: number | null;
   quotaBytes?: bigint | null;
   quotaPeriod?: QuotaPeriod | null;
+  profileId?: string | null;
+  bandwidthMode?: "default" | "unlimited" | "custom" | "profile";
+  bandwidthProfileId?: string | null;
+  downloadLimitBps?: bigint | null;
+  uploadLimitBps?: bigint | null;
+  burstDownloadBps?: bigint | null;
+  burstUploadBps?: bigint | null;
+  burstTimeSeconds?: number | null;
+  userId?: string;
 };
 
 export async function updatePeer(peerId: string, input: UpdatePeerInput) {
   const row = await mutablePeer(peerId);
+  const operationId = await startOperation({ type: "peer_update", routerId: row.router_id, peerId, userId: input.userId ?? null, context: { targetRouterId: input.routerId, targetInterfaceId: input.interfaceId } });
   const targetInterfaceResult = await query<InterfaceRow>("SELECT * FROM wireguard_interfaces WHERE id=$1 AND router_id=$2", [input.interfaceId,input.routerId]);
   const targetInterface = targetInterfaceResult.rows[0];
   if (!targetInterface) throw new Error("The selected WireGuard interface does not belong to the selected router.");
@@ -203,6 +292,7 @@ export async function updatePeer(peerId: string, input: UpdatePeerInput) {
   let sameRouterMutated=false;
   let recoveryTarget:RemoteWireGuardPeer|null=null;
   let recoveryClientIp:string|null=null;
+  let databaseCommitted=false;
   try {
     const remote = await assertCurrentRemote(sourceClient, row);
     originalRemote=remote;
@@ -225,6 +315,7 @@ export async function updatePeer(peerId: string, input: UpdatePeerInput) {
       recoveryClientIp=clientIp;
       await sourceClient.deletePeer(remote.id);
       sourceDeleted = true;
+      await operationStep(operationId, "source_peer", "succeeded", { action: "deleted", remoteId: remote.id });
     } else {
       await sourceClient.updatePeer(remote.id,{interfaceName:targetInterface.name,allowedAddress,comment:input.description||"",persistentKeepalive:input.persistentKeepalive});
       sameRouterMutated=true;
@@ -272,25 +363,38 @@ export async function updatePeer(peerId: string, input: UpdatePeerInput) {
        last_observed_rx_bytes=CASE WHEN $30 THEN $31 ELSE last_observed_rx_bytes END,
        last_observed_tx_bytes=CASE WHEN $30 THEN $32 ELSE last_observed_tx_bytes END,
        rx_bytes=CASE WHEN $30 THEN $31 ELSE rx_bytes END,tx_bytes=CASE WHEN $30 THEN $32 ELSE tx_bytes END,
-       last_counter_observed_at=CASE WHEN $30 THEN now() ELSE last_counter_observed_at END
+       last_counter_observed_at=CASE WHEN $30 THEN now() ELSE last_counter_observed_at END,
+       profile_id=$33,bandwidth_mode=$34,bandwidth_profile_id=$35,download_limit_bps=$36,upload_limit_bps=$37,
+       burst_download_bps=$38,burst_upload_bps=$39,burst_time_seconds=$40,lifecycle_status='active',sync_state='synced'
        WHERE id=$1`,
       [peerId,input.name,input.description || null,allowedAddress,input.clientAllowedIps,input.dnsServer,
         input.persistentKeepalive,input.mtu,input.expiresAt ?? null,input.endpointOverride || null,input.endpointPortOverride || null,
         remotePeerFingerprint(updated),JSON.stringify({ ...updated, rxBytes: updated.rxBytes.toString(), txBytes: updated.txBytes.toString() }),
         quota.limit?.toString() ?? null,quota.period,quota.start,quota.end,quota.periodRx.toString(),quota.periodTx.toString(),
         quota.reachedAt,usageWhenDisabled?.toString() ?? null,quota.bypassUntil,disabled,disabledReason,input.routerId,input.interfaceId,input.poolId,confirmedClientIp,updated.id,
-        changingRouter,updated.rxBytes.toString(),updated.txBytes.toString()],
+        changingRouter,updated.rxBytes.toString(),updated.txBytes.toString(),input.profileId===undefined?row.profile_id:input.profileId,input.bandwidthMode??row.bandwidth_mode,
+        input.bandwidthProfileId===undefined?row.bandwidth_profile_id:input.bandwidthProfileId,input.downloadLimitBps===undefined?row.download_limit_bps:input.downloadLimitBps?.toString()??null,
+        input.uploadLimitBps===undefined?row.upload_limit_bps:input.uploadLimitBps?.toString()??null,input.burstDownloadBps===undefined?row.burst_download_bps:input.burstDownloadBps?.toString()??null,
+        input.burstUploadBps===undefined?row.burst_upload_bps:input.burstUploadBps?.toString()??null,input.burstTimeSeconds===undefined?row.burst_time_seconds:input.burstTimeSeconds??null],
       );
       await releasePeerPoolAddress(db,peerId);
       await claimPoolAddress(db,pool,confirmedClientIp,peerId,input.name);
     });
+    databaseCommitted=true;
+    await operationStep(operationId, "database_state", "succeeded", { routerId: input.routerId, interfaceId: input.interfaceId, clientIp });
+    if(changingRouter)await deleteOwnedPeerQueueRemote(sourceClient,peerId);
+    const bandwidthPolicy=await getEffectivePeerBandwidth(peerId);
+    const bandwidth=await applyPeerBandwidthRemote(targetClient,{id:peerId,name:input.name,clientIp},bandwidthPolicy,{force:true});
+    await persistBandwidthResult(undefined,input.routerId,peerId,bandwidthPolicy,bandwidth);
+    await operationStep(operationId,"bandwidth","succeeded",{action:bandwidth.action,source:bandwidthPolicy.source});
     if(row.private_key_encrypted)await refreshPeerQr(peerId);
+    await finishOperation(operationId,"completed",{routerId:input.routerId,clientIp});
   } catch(error) {
-    if(sameRouterMutated&&originalRemote){
+    if(!databaseCommitted&&sameRouterMutated&&originalRemote){
       await sourceClient.updatePeer(originalRemote.id,{interfaceName:originalRemote.interfaceName,allowedAddress:originalRemote.allowedAddress,comment:originalRemote.comment||"",persistentKeepalive:originalRemote.persistentKeepalive,disabled:originalRemote.disabled}).catch(()=>undefined);
     }
-    if(createdTargetId&&!sourceDeleted)await targetClient.deletePeer(createdTargetId).catch(()=>undefined);
-    if(sourceDeleted&&recoveryTarget&&recoveryClientIp){
+    if(!databaseCommitted&&createdTargetId&&!sourceDeleted)await targetClient.deletePeer(createdTargetId).catch(()=>undefined);
+    if(!databaseCommitted&&sourceDeleted&&recoveryTarget&&recoveryClientIp){
       const recovery={...recoveryTarget,disabled:true};
       const recoveryIp=recoveryClientIp;
       await targetClient.updatePeer(recovery.id,{disabled:true}).catch(()=>undefined);
@@ -303,6 +407,11 @@ export async function updatePeer(peerId: string, input: UpdatePeerInput) {
         await claimPoolAddress(db,pool,recoveryIp,row.id,row.name);
       }).catch(()=>undefined);
     }
+    if(databaseCommitted){
+      await query("UPDATE peers SET lifecycle_status='needs_reconciliation',sync_state='error',updated_at=now() WHERE id=$1",[peerId]).catch(()=>undefined);
+    }
+    await failOperation(operationId,error,databaseCommitted||sourceDeleted||sameRouterMutated?"needs_reconciliation":"failed",
+      {databaseCommitted,sourceDeleted,createdTargetId,targetRouterId:input.routerId}).catch(()=>undefined);
     throw error;
   } finally {
     await sourceClient.close();
@@ -310,14 +419,17 @@ export async function updatePeer(peerId: string, input: UpdatePeerInput) {
   }
 }
 
-export async function regeneratePeerKeys(peerId: string, usePresharedKey: boolean) {
+export async function regeneratePeerKeys(peerId: string, usePresharedKey: boolean, userId?:string) {
   const row = await mutablePeer(peerId);
+  const operationId=await startOperation({type:"peer_key_rotation",routerId:row.router_id,peerId,userId:userId??null});
   const router = await getRouter(row.router_id);
   const client = clientForRouter(router);
+  let remoteMutated=false;let databaseCommitted=false;
   try {
     const remote = await assertCurrentRemote(client, row);
     const keys = generateWireGuardKeys(usePresharedKey);
     await client.updatePeer(remote.id, { publicKey: keys.publicKey, presharedKey: keys.presharedKey ?? "" });
+    remoteMutated=true;
     const updated = (await client.getPeers()).find((peer) => peer.id === remote.id || peer.publicKey === keys.publicKey);
     if (!updated) throw new Error("RouterOS did not return the regenerated peer during verification.");
     await query(
@@ -326,12 +438,21 @@ export async function regeneratePeerKeys(peerId: string, usePresharedKey: boolea
       [peerId,keys.publicKey,encryptSecret(keys.privateKey),keys.presharedKey ? encryptSecret(keys.presharedKey) : null,
         remotePeerFingerprint(updated),JSON.stringify({ ...updated, rxBytes: updated.rxBytes.toString(), txBytes: updated.txBytes.toString() })],
     );
+    databaseCommitted=true;await operationStep(operationId,"router_and_database_keys","succeeded");
     await refreshPeerQr(peerId);
+    await operationStep(operationId,"credential_material","succeeded",{previousConfigurationInvalidated:true});await finishOperation(operationId,"completed");
+  } catch(error) {
+    let rollbackFailed=false;
+    if(remoteMutated&&!databaseCommitted){try{const current=(await client.getPeers()).find(peer=>peer.id===row.remote_id);if(current)await client.updatePeer(current.id,{publicKey:row.public_key,presharedKey:row.preshared_key_encrypted?decryptSecret(row.preshared_key_encrypted):""})}catch{rollbackFailed=true}}
+    if(rollbackFailed)await query("UPDATE peers SET lifecycle_status='needs_reconciliation',sync_state='error',updated_at=now() WHERE id=$1",[peerId]).catch(()=>undefined);
+    await failOperation(operationId,error,rollbackFailed||databaseCommitted?"needs_reconciliation":"failed",{remoteMutated,databaseCommitted,rollbackFailed}).catch(()=>undefined);throw error;
   } finally { await client.close(); }
 }
 
 type MutablePeerRow = {
-  id:string;name:string;router_id:string;interface_id:string;remote_id:string|null;public_key:string;private_key_encrypted:string|null;preshared_key_encrypted:string|null;client_ip:string|null;allowed_address:string;remote_fingerprint:string|null;
+  id:string;name:string;description:string|null;router_id:string;interface_id:string;pool_id:string|null;remote_id:string|null;public_key:string;private_key_encrypted:string|null;preshared_key_encrypted:string|null;client_ip:string|null;allowed_address:string;remote_fingerprint:string|null;created_at:Date;
+  lifetime_rx_bytes:string;lifetime_tx_bytes:string;
+  profile_id:string|null;bandwidth_mode:"default"|"unlimited"|"custom"|"profile";bandwidth_profile_id:string|null;download_limit_bps:string|null;upload_limit_bps:string|null;burst_download_bps:string|null;burst_upload_bps:string|null;burst_time_seconds:number|null;
   disabled:boolean;expired:boolean;disabled_reason:"manual"|"expired"|"quota"|null;
   quota_limit_bytes:string|null;quota_period:QuotaPeriod|null;quota_period_started_at:Date|null;quota_period_ends_at:Date|null;
   period_rx_bytes:string;period_tx_bytes:string;quota_reached_at:Date|null;quota_usage_when_disabled:string|null;quota_bypass_until:Date|null;

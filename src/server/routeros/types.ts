@@ -20,6 +20,8 @@ export type RouterFacts = {
   wireguardSupported: boolean;
 };
 
+export type RouterClock = { date: string; time: string; timeZoneName: string | null };
+
 export type RemoteWireGuardInterface = {
   id: string;
   name: string;
@@ -51,6 +53,35 @@ export type RemoteWireGuardPeer = {
 export type RemoteAddress = { id: string; interfaceName: string; address: string; disabled: boolean };
 export type RemoteRoute = Record<string, string>;
 export type RemoteNatRule = Record<string, string>;
+export type RemoteQueueTree = Record<string, string>;
+export type RemoteMangleRule = Record<string, string>;
+export type RemoteFilterRule = Record<string, string>;
+
+export type RemoteSimpleQueue = {
+  id:string;
+  name:string;
+  target:string;
+  maxLimit:string;
+  burstLimit:string;
+  burstThreshold:string;
+  burstTime:string;
+  disabled:boolean;
+  comment:string;
+  dynamic:boolean;
+  invalid:boolean;
+};
+
+export type CreateRemoteSimpleQueue = {
+  name:string;
+  target:string;
+  maxLimit:string;
+  comment:string;
+  disabled?:boolean;
+  burstLimit?:string;
+  burstThreshold?:string;
+  burstTime?:string;
+};
+export type UpdateRemoteSimpleQueue = Partial<CreateRemoteSimpleQueue>;
 
 export type CreateRemotePeer = {
   interfaceName: string;
@@ -72,16 +103,24 @@ export type UpdateRemoteInterface = Partial<CreateRemoteInterface>;
 
 export interface RouterOsClient {
   testConnection(): Promise<RouterFacts>;
+  getClock(): Promise<RouterClock>;
   getInterfaces(): Promise<RemoteWireGuardInterface[]>;
   getPeers(): Promise<RemoteWireGuardPeer[]>;
   getAddresses(): Promise<RemoteAddress[]>;
   getRoutes(): Promise<RemoteRoute[]>;
   getNatRules(): Promise<RemoteNatRule[]>;
+  getSimpleQueues(): Promise<RemoteSimpleQueue[]>;
+  getQueueTrees(): Promise<RemoteQueueTree[]>;
+  getMangleRules(): Promise<RemoteMangleRule[]>;
+  getFilterRules(): Promise<RemoteFilterRule[]>;
   createPeer(peer: CreateRemotePeer): Promise<string>;
   updatePeer(id: string, peer: UpdateRemotePeer): Promise<void>;
   deletePeer(id: string): Promise<void>;
   createInterface(input: CreateRemoteInterface): Promise<string>;
   updateInterface(id: string, input: UpdateRemoteInterface): Promise<void>;
+  createSimpleQueue(input: CreateRemoteSimpleQueue): Promise<string>;
+  updateSimpleQueue(id: string, input: UpdateRemoteSimpleQueue): Promise<void>;
+  deleteSimpleQueue(id: string): Promise<void>;
   close(): Promise<void>;
 }
 

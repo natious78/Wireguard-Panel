@@ -9,18 +9,18 @@ The web application is available at `http://SERVER-IP:2040`. It is also a Progre
 - Native RouterOS API (8728/8729) and RouterOS REST adapters behind one service interface
 - Multiple routers, connection tests, RouterOS facts, interface discovery, and safe periodic synchronization
 - Existing peer import with `Imported` origin and no automatic deletion or overwrite
-- Managed peer creation, IP-pool allocation, duplicate prevention, editing, enable/disable, expiration, regeneration, and confirmed deletion
+- Managed peer creation, transactional IP-pool allocation, duplicate prevention, editing, enable/disable, expiration, explicit key rotation, and confirmed deletion
 - Optional one-time, daily, weekly, and monthly RX+TX traffic quotas with counter-reset-safe accounting and automatic per-peer RouterOS enforcement
 - Peer comments synchronized with RouterOS, configurable quota timezone/boundaries, warning states, manual usage reset, and audited temporary re-enable
-- WireGuard Curve25519 keys, optional pre-shared keys, `.conf` export, and official-client-compatible encrypted PNG/SVG QR assets
+- WireGuard Curve25519 keys, optional pre-shared keys, protected `.conf` export, and official-client-compatible PNG/SVG QR generation from the current encrypted configuration
 - Application-side WireGuard IPAM with confirmed subnet suggestions, reservations, imported-address detection, utilization, and transactional allocation
 - RouterOS-duration-aware handshake status (`Online`, `Recently Active`, `Offline`, `Never Connected`, `Disabled`, and `Router Unreachable`)
-- PostgreSQL-backed users, sessions, routers, interfaces, peers, traffic snapshots, sync runs, settings, and audit logs
+- PostgreSQL-backed users, sessions, routers, interfaces, peers, traffic aggregates, durable operations, drift records, settings, and audit logs
 - Scrypt password hashing, database sessions, CSRF checks, login throttling, RBAC, AES-256-GCM secret encryption, and redacted errors
-- Responsive light/dark admin UI, large-table filtering/pagination, bulk actions, PWA manifest/service worker, and install icons
-- A separate worker container for synchronization and expiration enforcement
+- Responsive light/dark admin UI, sortable/filterable tables, CSV/manual bulk creation with protected ZIP results, PWA manifest/service worker, and install icons
+- A separate worker container with independent health-tracked jobs for connectivity, synchronization, traffic, quotas, expiration, bandwidth verification, retention, and reconciliation
 - Health checks, migration locking, non-root runtime, persistent PostgreSQL storage, and `restart: unless-stopped`
-- Unit tests for critical security, allocation, configuration, reconciliation, permission, expiration, QR, and mocked MikroTik lifecycle behavior
+- Unit tests for critical security, allocation, configuration, reconciliation, permissions, expiration, RouterOS duration parsing, bandwidth direction, CSV/ZIP, and mocked MikroTik lifecycle behavior
 
 ## Architecture
 
@@ -179,9 +179,9 @@ Automatic and manual assignment check both PostgreSQL and the current MikroTik `
 
 Each pool page shows total, used/imported, reserved, and available counts, a utilization indicator, and a filterable/sortable address viewer. Address-family metadata is stored for future IPv6 support; allocation is intentionally IPv4-only today.
 
-## Client QR assets
+## Client QR credentials
 
-Managed peers receive PNG and SVG QR assets generated from the full current WireGuard configuration (`PrivateKey`, `Address`, `DNS`, `AllowedIPs`, `Endpoint`, and `PersistentKeepalive`). QR payloads are encrypted at rest with `APP_ENCRYPTION_KEY`, refreshed after relevant peer/key/configuration changes, and lazily repaired if their configuration hash is stale. Download either format from the peer detail page. Imported peers cannot receive a working client QR because RouterOS never exposes the client's private key.
+Managed peers receive PNG and SVG QR codes generated on demand from the full current WireGuard configuration (`PrivateKey`, `Address`, `DNS`, `AllowedIPs`, `Endpoint`, and `PersistentKeepalive`). Private configuration values remain encrypted at rest with `APP_ENCRYPTION_KEY`; unnecessary QR image copies are not stored. A configuration hash is refreshed after relevant peer/key changes and checked before rendering. Viewing and downloading credentials use distinct permissions and audit events. Imported peers cannot receive a working client QR because RouterOS never exposes the client's private key.
 
 ## Expiration
 
@@ -210,7 +210,7 @@ At a recurring boundary, only a peer whose disable reason is `quota` is automati
 - Cookies are `HttpOnly` and `SameSite=Strict`; the `Secure` flag is enabled when `APP_URL` uses `https://`. Plain HTTP remains functional for the required private-network URL, but a trusted HTTPS reverse proxy is the correct production posture.
 - Login attempts are throttled per source IP and username after five failures in a 15-minute window.
 - All mutation APIs require an authenticated role, same-origin CSRF token, and origin match.
-- Administrator, operator, and viewer roles are implemented in the authorization layer. The bootstrap user is an administrator.
+- Super Admin, Administrator, and Read Only roles are enforced in the authorization layer. The bootstrap user is a Super Admin. Super Admins can manage accounts under **User access**; disabling an account, changing its role, or changing its password revokes its active sessions. Read Only accounts cannot retrieve private configurations or QR codes.
 - Logs and audits intentionally exclude passwords, private keys, pre-shared keys, session tokens, and the encryption key.
 
 ## Health and operations
@@ -339,9 +339,13 @@ The server uses these read paths where required:
 /ip/address
 /ip/route
 /ip/firewall/nat
+/queue/simple
+/queue/tree
+/ip/firewall/mangle
+/ip/firewall/filter
 ```
 
-Write operations are limited to WireGuard interfaces and WireGuard peers. The UI does not expose arbitrary RouterOS commands.
+Write operations are limited to WireGuard interfaces, WireGuard peers, and deterministic application-owned Simple Queues. Existing queues, queue trees, mangle rules, and FastTrack rules are inspected before shaping; conflicting or bypass-prone configurations are surfaced instead of silently stacked. The UI does not expose arbitrary RouterOS commands.
 
 ## License
 

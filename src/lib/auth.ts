@@ -9,8 +9,27 @@ export const SESSION_COOKIE = "wg_session";
 export type SessionUser = {
   id: string;
   username: string;
-  role: "admin" | "operator" | "viewer";
+  role: "super_admin" | "administrator" | "read_only" | "admin" | "operator" | "viewer";
 };
+
+export type Permission =
+  | "read" | "write" | "delete" | "settings"
+  | "router:view" | "peer:view" | "traffic:view" | "traffic:reset" | "settings:manage"
+  | "peer:create" | "peer:update" | "peer:disable" | "peer:delete" | "peer:bulk" | "peer:rotate_keys"
+  | "peer:view_config" | "peer:download_config"
+  | "router:manage" | "pool:manage" | "profile:manage" | "bandwidth:manage" | "drift:resolve"
+  | "audit:read" | "operations:read" | "user:manage";
+
+const administratorPermissions = new Set<Permission>([
+  "read", "write", "delete", "settings",
+  "router:view", "peer:view", "traffic:view", "traffic:reset", "settings:manage",
+  "peer:create", "peer:update", "peer:disable", "peer:delete", "peer:bulk", "peer:rotate_keys",
+  "peer:view_config", "peer:download_config",
+  "router:manage", "pool:manage", "profile:manage", "bandwidth:manage", "drift:resolve",
+  "audit:read", "operations:read",
+]);
+
+const readOnlyPermissions = new Set<Permission>(["read", "router:view", "peer:view", "traffic:view", "audit:read", "operations:read"]);
 
 export async function authenticate(username: string, password: string): Promise<SessionUser | null> {
   const result = await query<SessionUser & { password_hash: string; enabled: boolean }>(
@@ -72,17 +91,19 @@ export async function destroySession() {
   if (token) await query("DELETE FROM sessions WHERE token_hash = $1", [hashToken(token)]);
 }
 
-export function can(user: SessionUser, permission: "read" | "write" | "delete" | "settings") {
-  if (user.role === "admin") return true;
-  if (user.role === "operator") return permission === "read" || permission === "write";
-  return permission === "read";
+export function can(user: SessionUser, permission: Permission) {
+  // Legacy names are accepted during a rolling deployment while migration 004 rewrites stored roles.
+  if (user.role === "super_admin" || user.role === "admin") return true;
+  if (user.role === "administrator") return administratorPermissions.has(permission);
+  if (user.role === "operator") return permission === "read" || permission === "write" || permission.startsWith("peer:");
+  return readOnlyPermissions.has(permission);
 }
 
 export function clientIp(requestHeaders: Headers) {
   return requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() || requestHeaders.get("x-real-ip") || "unknown";
 }
 
-export async function requireUser(permission: "read" | "write" | "delete" | "settings" = "read") {
+export async function requireUser(permission: Permission = "read") {
   const user = await getSession();
   if (!user) return { user: null, status: 401 as const, error: "Authentication required." };
   if (!can(user, permission)) return { user: null, status: 403 as const, error: "You do not have permission for this action." };

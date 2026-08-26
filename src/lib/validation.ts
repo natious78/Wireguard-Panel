@@ -17,6 +17,37 @@ export function quotaBytesFromInput(value: { quotaEnabled: boolean; quotaValue?:
   return value.quotaEnabled && value.quotaValue ? toQuotaBytes(value.quotaValue, value.quotaUnit) : null;
 }
 
+const bandwidthFields = {
+  bandwidthMode: z.enum(["default", "unlimited", "custom", "profile"]).default("default"),
+  bandwidthProfileId: z.string().uuid().nullable().optional(),
+  downloadLimitMbps: z.coerce.number().positive().max(1_000_000).nullable().optional(),
+  uploadLimitMbps: z.coerce.number().positive().max(1_000_000).nullable().optional(),
+  burstDownloadMbps: z.coerce.number().positive().max(1_000_000).nullable().optional(),
+  burstUploadMbps: z.coerce.number().positive().max(1_000_000).nullable().optional(),
+  burstTimeSeconds: z.coerce.number().int().min(1).max(3600).nullable().optional(),
+};
+const updateBandwidthFields={bandwidthMode:z.enum(["default","unlimited","custom","profile"]).optional(),bandwidthProfileId:z.string().uuid().nullable().optional(),downloadLimitMbps:z.coerce.number().positive().max(1_000_000).nullable().optional(),uploadLimitMbps:z.coerce.number().positive().max(1_000_000).nullable().optional(),burstDownloadMbps:z.coerce.number().positive().max(1_000_000).nullable().optional(),burstUploadMbps:z.coerce.number().positive().max(1_000_000).nullable().optional(),burstTimeSeconds:z.coerce.number().int().min(1).max(3600).nullable().optional()};
+
+const validateBandwidth = (value: { bandwidthMode?: string; bandwidthProfileId?: string | null; downloadLimitMbps?: number | null; uploadLimitMbps?: number | null }, context: z.RefinementCtx) => {
+  if (value.bandwidthMode === "custom" && (!value.downloadLimitMbps || !value.uploadLimitMbps)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["downloadLimitMbps"], message: "Custom bandwidth requires both download and upload limits." });
+  }
+  if (value.bandwidthMode === "profile" && !value.bandwidthProfileId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["bandwidthProfileId"], message: "Select a bandwidth profile." });
+  }
+};
+
+export function bandwidthBpsFromInput(value: {
+  downloadLimitMbps?: number | null; uploadLimitMbps?: number | null;
+  burstDownloadMbps?: number | null; burstUploadMbps?: number | null;
+}) {
+  const convert = (amount?: number | null) => amount === undefined ? undefined : amount === null ? null : BigInt(Math.round(amount * 1_000_000));
+  return {
+    downloadLimitBps: convert(value.downloadLimitMbps), uploadLimitBps: convert(value.uploadLimitMbps),
+    burstDownloadBps: convert(value.burstDownloadMbps), burstUploadBps: convert(value.burstUploadMbps),
+  };
+}
+
 export const routerSchema = z.object({
   name: z.string().trim().min(2).max(80),
   managementIp: z.string().trim().refine((value) => net.isIP(value) !== 0, "Enter a valid IPv4 or IPv6 management address."),
@@ -51,8 +82,10 @@ export const peerCreateSchema = z.object({
   endpointPortOverride: z.coerce.number().int().min(1).max(65535).nullable().optional(),
   expiresAt: z.string().datetime().nullable().optional().transform((value) => value ? new Date(value) : null),
   usePresharedKey: z.boolean().default(false),
+  profileId: z.string().uuid().nullable().optional(),
+  ...bandwidthFields,
   ...quotaFields,
-}).superRefine((value,context)=>{validateQuota(value,context);if(value.assignmentMode==="manual"&&!value.requestedIp)context.addIssue({code:z.ZodIssueCode.custom,path:["requestedIp"],message:"Enter a manual client IP address."})});
+}).superRefine((value,context)=>{validateQuota(value,context);validateBandwidth(value,context);if(value.assignmentMode==="manual"&&!value.requestedIp)context.addIssue({code:z.ZodIssueCode.custom,path:["requestedIp"],message:"Enter a manual client IP address."})});
 
 export const peerUpdateSchema = z.object({
   routerId: z.string().uuid(),
@@ -69,8 +102,10 @@ export const peerUpdateSchema = z.object({
   expiresAt: z.string().datetime().nullable().optional().transform((value) => value ? new Date(value) : null),
   endpointOverride: z.string().trim().max(255).nullable().optional(),
   endpointPortOverride: z.coerce.number().int().min(1).max(65535).nullable().optional(),
+  profileId: z.string().uuid().nullable().optional(),
+  ...updateBandwidthFields,
   ...quotaFields,
-}).superRefine(validateQuota);
+}).superRefine((value,context)=>{validateQuota(value,context);validateBandwidth(value,context)});
 
 export const interfaceUpdateSchema = z.object({
   name: z.string().trim().min(1).max(80),

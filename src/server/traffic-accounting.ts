@@ -68,11 +68,14 @@ export async function pollRouterTraffic(routerId: string) {
       }
     }
     await query(`UPDATE routers SET stats_poll_status='reachable',last_stats_poll_at=$2,last_stats_success_at=$2,
-      last_stats_error=NULL,connection_status='connected',last_checked_at=$2,updated_at=now() WHERE id=$1`,[routerId,attemptedAt]);
+      last_stats_error=NULL,connection_status='connected',last_checked_at=$2,last_successful_connection_at=$2,
+      consecutive_failures=0,next_retry_at=NULL,updated_at=now() WHERE id=$1`,[routerId,attemptedAt]);
     return { observed, disabled, reenabled, failed };
   } catch(error) {
     await query(`UPDATE routers SET stats_poll_status='unreachable',last_stats_poll_at=$2,last_stats_error=$3,
       connection_status=CASE WHEN connection_status='auth_failed' THEN connection_status ELSE 'offline' END,
+      last_failed_operation_at=$2,last_failed_operation=$3,consecutive_failures=consecutive_failures+1,
+      next_retry_at=now()+(LEAST(3600,power(2,LEAST(consecutive_failures,11))*15)::text||' seconds')::interval,
       last_checked_at=$2,updated_at=now() WHERE id=$1`,[routerId,attemptedAt,redactError(error)]).catch(()=>undefined);
     throw error;
   } finally { await client.close(); }
@@ -227,7 +230,7 @@ async function systemAuditWithClient(db: PoolClient, action: string, peerId: str
 }
 
 export async function pollAllRouterTraffic() {
-  const routers = await query<{ id: string; name: string }>("SELECT id,name FROM routers WHERE enabled=true ORDER BY name");
+  const routers = await query<{ id: string; name: string }>("SELECT id,name FROM routers WHERE enabled=true AND (next_retry_at IS NULL OR next_retry_at<=now()) ORDER BY name");
   const totals = { routers: routers.rowCount ?? 0, observed: 0, disabled: 0, reenabled: 0, failed: 0 };
   for (const router of routers.rows) {
     try {

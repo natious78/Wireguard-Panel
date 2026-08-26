@@ -12,7 +12,9 @@ import {
   Router,
   Settings,
   ShieldCheck,
+  HeartPulse,
   Waypoints,
+  Users,
   X,
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -38,12 +40,13 @@ const groups = [
     items: [
       { href: "/routers", label: "Routers", icon: Router },
       { href: "/traffic", label: "Traffic", icon: Activity },
+      { href: "/operations", label: "Operations", icon: HeartPulse },
       { href: "/audit", label: "Audit Logs", icon: BookOpenCheck },
     ],
   },
   {
     label: "System",
-    items: [{ href: "/settings", label: "Settings", icon: Settings }],
+    items: [{ href: "/settings", label: "Settings", icon: Settings },{href:"/users",label:"User access",icon:Users}],
   },
 ];
 
@@ -64,7 +67,7 @@ export function AppShell({ user, children }: { user: { username: string; role: s
           {groups.map((group) => (
             <div className="nav-group" key={group.label}>
               <div className="nav-label">{group.label}</div>
-              {group.items.map((item) => {
+              {group.items.filter(item=>item.href!=="/users"||user.role==="super_admin"||user.role==="admin").map((item) => {
                 const Icon = item.icon;
                 const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
                 return <a key={item.href} href={item.href} aria-current={active ? "page" : undefined} onClick={() => setMenu(false)}><Icon aria-hidden="true" />{item.label}</a>;

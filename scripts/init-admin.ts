@@ -14,7 +14,7 @@ async function initAdmin() {
     return;
   }
   const passwordHash = await hashPassword(config.ADMIN_PASSWORD);
-  await pool.query("INSERT INTO users(username, password_hash, role) VALUES ($1,$2,'admin')", [
+  await pool.query("INSERT INTO users(username, password_hash, role) VALUES ($1,$2,'super_admin')", [
     config.ADMIN_USERNAME,
     passwordHash,
   ]);

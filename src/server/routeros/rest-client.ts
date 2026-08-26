@@ -2,16 +2,23 @@ import { normalizeInterface, normalizePeer, rosBoolean, versionSupportsWireGuard
 import type {
   CreateRemoteInterface,
   CreateRemotePeer,
+  CreateRemoteSimpleQueue,
   RemoteAddress,
   RemoteNatRule,
+  RemoteMangleRule,
+  RemoteFilterRule,
+  RemoteQueueTree,
+  RemoteSimpleQueue,
   RemoteRoute,
   RemoteWireGuardInterface,
   RemoteWireGuardPeer,
   RouterConnectionOptions,
   RouterFacts,
+  RouterClock,
   RouterOsClient,
   UpdateRemoteInterface,
   UpdateRemotePeer,
+  UpdateRemoteSimpleQueue,
 } from "./types";
 import { RouterConnectionError } from "./types";
 import { Agent } from "undici";
@@ -80,6 +87,11 @@ export class RestRouterOsClient implements RouterOsClient {
     return facts;
   }
 
+  async getClock(): Promise<RouterClock> {
+    const row=(await this.request<Record<string,string>[]>("system/clock"))[0]??{};
+    return {date:row.date??"",time:row.time??"",timeZoneName:row["time-zone-name"]??null};
+  }
+
   async getInterfaces(): Promise<RemoteWireGuardInterface[]> {
     return (await this.request<Record<string, unknown>[]>("interface/wireguard")).map(normalizeInterface);
   }
@@ -94,6 +106,10 @@ export class RestRouterOsClient implements RouterOsClient {
   }
   getRoutes() { return this.request<RemoteRoute[]>("ip/route"); }
   getNatRules() { return this.request<RemoteNatRule[]>("ip/firewall/nat"); }
+  async getSimpleQueues():Promise<RemoteSimpleQueue[]>{return(await this.request<Record<string,unknown>[]>("queue/simple")).map(normalizeSimpleQueue)}
+  getQueueTrees(){return this.request<RemoteQueueTree[]>("queue/tree")}
+  getMangleRules(){return this.request<RemoteMangleRule[]>("ip/firewall/mangle")}
+  getFilterRules(){return this.request<RemoteFilterRule[]>("ip/firewall/filter")}
 
   async createPeer(peer: CreateRemotePeer) {
     const result = await this.request<Record<string, string>>("interface/wireguard/peers", {
@@ -117,6 +133,9 @@ export class RestRouterOsClient implements RouterOsClient {
   async updateInterface(id: string, input: UpdateRemoteInterface) {
     await this.request(`interface/wireguard/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(toRosInterface(input)) });
   }
+  async createSimpleQueue(input:CreateRemoteSimpleQueue){const result=await this.request<Record<string,string>>("queue/simple",{method:"PUT",body:JSON.stringify(toRosSimpleQueue(input))});return result[".id"]}
+  async updateSimpleQueue(id:string,input:UpdateRemoteSimpleQueue){await this.request(`queue/simple/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(toRosSimpleQueue(input))})}
+  async deleteSimpleQueue(id:string){await this.request(`queue/simple/${encodeURIComponent(id)}`,{method:"DELETE"})}
   async close() { if (this.dispatcher) await this.dispatcher.close(); }
 }
 
@@ -142,3 +161,5 @@ function toRosInterface(input: CreateRemoteInterface | UpdateRemoteInterface) {
     disabled: input.disabled === undefined ? undefined : input.disabled ? "yes" : "no",
   }).filter(([, value]) => value !== undefined));
 }
+function toRosSimpleQueue(input:CreateRemoteSimpleQueue|UpdateRemoteSimpleQueue){return Object.fromEntries(Object.entries({name:input.name,target:input.target,"max-limit":input.maxLimit,comment:input.comment,disabled:input.disabled===undefined?undefined:input.disabled?"yes":"no","burst-limit":input.burstLimit,"burst-threshold":input.burstThreshold,"burst-time":input.burstTime}).filter(([,value])=>value!==undefined))}
+function normalizeSimpleQueue(row:Record<string,unknown>):RemoteSimpleQueue{return{id:String(row[".id"]??""),name:String(row.name??""),target:String(row.target??row["target-addresses"]??""),maxLimit:String(row["max-limit"]??"0/0"),burstLimit:String(row["burst-limit"]??"0/0"),burstThreshold:String(row["burst-threshold"]??"0/0"),burstTime:String(row["burst-time"]??"0s/0s"),disabled:rosBoolean(row.disabled),comment:String(row.comment??""),dynamic:rosBoolean(row.dynamic),invalid:rosBoolean(row.invalid)}}
