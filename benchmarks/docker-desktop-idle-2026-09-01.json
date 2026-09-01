@@ -1,0 +1,36 @@
+{
+  "environment": "Docker Desktop Linux VM on Windows",
+  "scenario": "idle",
+  "startedAt": "2026-09-01T09:44:36.2184428Z",
+  "durationSeconds": 30,
+  "sampleSeconds": 5,
+  "containers": [
+    {
+      "name": "wgmt-test-app-1",
+      "role": "combined web and worker",
+      "averageCpuPercent": 2.04,
+      "peakCpuPercent": 9.76,
+      "averageMemoryBytes": 94378131,
+      "peakMemoryBytes": 95021957,
+      "peakPids": 29
+    },
+    {
+      "name": "wgmt-test-db-1",
+      "role": "PostgreSQL 17",
+      "averageCpuPercent": 0.2,
+      "peakCpuPercent": 0.54,
+      "averageMemoryBytes": 24505221,
+      "peakMemoryBytes": 27137147,
+      "peakPids": 11
+    }
+  ],
+  "amd64ImageBytes": 105283108,
+  "arm64ImageBytes": 105810869,
+  "database": {
+    "bytes": 9262771,
+    "peers": 0,
+    "trafficSnapshots": 0,
+    "auditRows": 0
+  },
+  "limits": "Development baseline only. No MikroTik, router sync, or peer workload was present."
+}

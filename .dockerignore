@@ -4,4 +4,10 @@ node_modules
 .env
 coverage
 design-system
+tests
+backups
+.pnpm-store
+docs
+tsconfig.tsbuildinfo
+benchmarks/*.tar
 *.log

@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: process.env.NEXT_STANDALONE === "true" ? "standalone" : undefined,
   poweredByHeader: false,
+  serverExternalPackages: ["undici"],
   experimental: {
     serverActions: { bodySizeLimit: "1mb" },
   },

@@ -1,13 +1,15 @@
 import { query } from "@/lib/db";
+import { logFault, logRecovery } from "@/lib/logger";
 import { redactError } from "@/lib/security";
 import { clientForRouter, getRouter } from "./router-repository";
-import type { RouterClock } from "./routeros";
+import type { RouterClock, RouterOsClient } from "./routeros";
 
 export async function pollRouterHealth(routerId: string) {
-  const router = await getRouter(routerId);
-  const client = clientForRouter(router);
+  let client:RouterOsClient|undefined;
   const started = Date.now();
   try {
+    const router = await getRouter(routerId);
+    client = clientForRouter(router);
     const [facts, clock] = await Promise.all([client.testConnection(), client.getClock()]);
     const latencyMs = Date.now() - started;
     const clockDifferenceSeconds = routerClockDifferenceSeconds(clock);
@@ -19,18 +21,23 @@ export async function pollRouterHealth(routerId: string) {
   } catch (error) {
     await markRouterFailure(routerId,error);
     throw error;
-  } finally { await client.close(); }
+  } finally { await client?.close(); }
 }
 
 export async function pollAllRouterHealth() {
   const routers = await query<{ id:string; name:string }>("SELECT id,name FROM routers WHERE enabled=true AND (next_retry_at IS NULL OR next_retry_at<=now()) ORDER BY name");
-  const results = await Promise.allSettled(routers.rows.map((router) => pollRouterHealth(router.id)));
+  const results:PromiseSettledResult<unknown>[]=[];
+  for(const router of routers.rows){
+    try{results.push({status:"fulfilled",value:await pollRouterHealth(router.id)});logRecovery(`router-health:${router.id}`,"Router connection restored",{router:router.name})}
+    catch(error){const signature=redactError(error);results.push({status:"rejected",reason:error});logFault(`router-health:${router.id}`,signature,"Router became unreachable",{router:router.name,error:signature})}
+  }
   return { routers:routers.rows.length,healthy:results.filter((result)=>result.status==="fulfilled").length,failed:results.filter((result)=>result.status==="rejected").length };
 }
 
 export async function markRouterFailure(routerId:string,error:unknown) {
   const message=redactError(error);
   await query(`UPDATE routers SET connection_status=CASE WHEN $2 ILIKE '%password%' OR $2 ILIKE '%username%' THEN 'auth_failed' ELSE 'offline' END,
+    stats_poll_status='unreachable',last_stats_poll_at=now(),last_stats_error=$2,
     last_error=$2,last_failed_operation_at=now(),last_failed_operation=$2,last_checked_at=now(),
     consecutive_failures=consecutive_failures+1,
     next_retry_at=now()+(LEAST(3600,power(2,LEAST(consecutive_failures,11))*15)::text||' seconds')::interval,updated_at=now() WHERE id=$1`,[routerId,message]);

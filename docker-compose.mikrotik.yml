@@ -1,0 +1,78 @@
+# Local Linux/Docker simulation of the RouterOS two-container deployment.
+# RouterOS itself does not read this file; use docs/MIKROTIK_CONTAINER.md there.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    command: ["-c", "shared_buffers=32MB", "-c", "max_connections=25", "-c", "wal_compression=on", "-c", "checkpoint_timeout=15min", "-c", "max_wal_size=128MB", "-c", "min_wal_size=32MB", "-c", "log_min_messages=warning"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wireguard_control}
+      POSTGRES_USER: ${POSTGRES_USER:-wireguard_control}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - mikrotik_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 192m
+
+  app:
+    image: ${MIKROTIK_IMAGE:-wireguard-control:mikrotik}
+    build:
+      context: .
+      dockerfile: Dockerfile.mikrotik
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_URL: ${MIKROTIK_APP_URL:-http://localhost:2041}
+      PORT: 2040
+      HOSTNAME: 0.0.0.0
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-wireguard_control}
+      DB_USER: ${POSTGRES_USER:-wireguard_control}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Set APP_ENCRYPTION_KEY in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-300}
+      MIKROTIK_STATS_INTERVAL: ${MIKROTIK_STATS_INTERVAL:-30}
+      ROUTER_HEALTH_INTERVAL_SECONDS: ${ROUTER_HEALTH_INTERVAL_SECONDS:-60}
+      BANDWIDTH_INTERVAL_SECONDS: ${BANDWIDTH_INTERVAL_SECONDS:-300}
+      OPERATION_RECONCILIATION_INTERVAL_SECONDS: ${OPERATION_RECONCILIATION_INTERVAL_SECONDS:-60}
+      RAW_TRAFFIC_SAMPLE_SECONDS: ${RAW_TRAFFIC_SAMPLE_SECONDS:-300}
+      TRAFFIC_AGGREGATION_INTERVAL_SECONDS: ${TRAFFIC_AGGREGATION_INTERVAL_SECONDS:-3600}
+      MAINTENANCE_INTERVAL_SECONDS: ${MAINTENANCE_INTERVAL_SECONDS:-21600}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-180}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HEALTH_WORKER_STALE_SECONDS: ${HEALTH_WORKER_STALE_SECONDS:-900}
+      STORAGE_WARNING_PERCENT: ${STORAGE_WARNING_PERCENT:-80}
+      STORAGE_CRITICAL_PERCENT: ${STORAGE_CRITICAL_PERCENT:-90}
+      EXPIRATION_INTERVAL_SECONDS: ${EXPIRATION_INTERVAL_SECONDS:-60}
+      ROUTER_CONNECT_TIMEOUT_MS: ${ROUTER_CONNECT_TIMEOUT_MS:-8000}
+      ONLINE_THRESHOLD_SECONDS: ${ONLINE_THRESHOLD_SECONDS:-180}
+      RECENT_THRESHOLD_SECONDS: ${RECENT_THRESHOLD_SECONDS:-900}
+      PERSISTENT_DATA_PATH: /data
+      DEMO_MODE: ${DEMO_MODE:-false}
+    volumes:
+      - mikrotik_app_data:/data
+    ports:
+      - "${MIKROTIK_TEST_PORT:-2041}:2040"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:2040/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    mem_limit: 384m
+
+volumes:
+  mikrotik_postgres_data:
+  mikrotik_app_data:

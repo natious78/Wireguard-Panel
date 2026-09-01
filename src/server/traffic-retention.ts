@@ -9,16 +9,22 @@ export async function aggregateAndRetainTraffic() {
   return withTransaction(async(db)=>{
     const hourly=await db.query(`INSERT INTO traffic_usage_aggregates(peer_id,bucket_type,bucket_start,rx_bytes,tx_bytes,sample_count,updated_at)
       SELECT peer_id,'hour',date_trunc('hour',captured_at),sum(delta_rx_bytes),sum(delta_tx_bytes),count(*),now()
-      FROM traffic_snapshots GROUP BY peer_id,date_trunc('hour',captured_at)
-      ON CONFLICT(peer_id,bucket_type,bucket_start) DO UPDATE SET rx_bytes=excluded.rx_bytes,tx_bytes=excluded.tx_bytes,sample_count=excluded.sample_count,updated_at=now()`);
+      FROM traffic_snapshots WHERE captured_at>=now()-($1::text||' hours')::interval GROUP BY peer_id,date_trunc('hour',captured_at)
+      ON CONFLICT(peer_id,bucket_type,bucket_start) DO UPDATE SET rx_bytes=excluded.rx_bytes,tx_bytes=excluded.tx_bytes,sample_count=excluded.sample_count,updated_at=now()
+      WHERE traffic_usage_aggregates.rx_bytes IS DISTINCT FROM excluded.rx_bytes OR traffic_usage_aggregates.tx_bytes IS DISTINCT FROM excluded.tx_bytes
+         OR traffic_usage_aggregates.sample_count IS DISTINCT FROM excluded.sample_count`,[policy.rawTrafficHours]);
     await db.query(`INSERT INTO traffic_usage_aggregates(peer_id,bucket_type,bucket_start,rx_bytes,tx_bytes,sample_count,updated_at)
       SELECT peer_id,'day',date_trunc('day',bucket_start),sum(rx_bytes),sum(tx_bytes),sum(sample_count),now()
-      FROM traffic_usage_aggregates WHERE bucket_type='hour' GROUP BY peer_id,date_trunc('day',bucket_start)
-      ON CONFLICT(peer_id,bucket_type,bucket_start) DO UPDATE SET rx_bytes=excluded.rx_bytes,tx_bytes=excluded.tx_bytes,sample_count=excluded.sample_count,updated_at=now()`);
+      FROM traffic_usage_aggregates WHERE bucket_type='hour' AND bucket_start>=date_trunc('day',now())-interval '2 days' GROUP BY peer_id,date_trunc('day',bucket_start)
+      ON CONFLICT(peer_id,bucket_type,bucket_start) DO UPDATE SET rx_bytes=excluded.rx_bytes,tx_bytes=excluded.tx_bytes,sample_count=excluded.sample_count,updated_at=now()
+      WHERE traffic_usage_aggregates.rx_bytes IS DISTINCT FROM excluded.rx_bytes OR traffic_usage_aggregates.tx_bytes IS DISTINCT FROM excluded.tx_bytes
+         OR traffic_usage_aggregates.sample_count IS DISTINCT FROM excluded.sample_count`);
     await db.query(`INSERT INTO traffic_usage_aggregates(peer_id,bucket_type,bucket_start,rx_bytes,tx_bytes,sample_count,updated_at)
       SELECT peer_id,'month',date_trunc('month',bucket_start),sum(rx_bytes),sum(tx_bytes),sum(sample_count),now()
-      FROM traffic_usage_aggregates WHERE bucket_type='day' GROUP BY peer_id,date_trunc('month',bucket_start)
-      ON CONFLICT(peer_id,bucket_type,bucket_start) DO UPDATE SET rx_bytes=excluded.rx_bytes,tx_bytes=excluded.tx_bytes,sample_count=excluded.sample_count,updated_at=now()`);
+      FROM traffic_usage_aggregates WHERE bucket_type='day' AND bucket_start>=date_trunc('month',now())-interval '2 months' GROUP BY peer_id,date_trunc('month',bucket_start)
+      ON CONFLICT(peer_id,bucket_type,bucket_start) DO UPDATE SET rx_bytes=excluded.rx_bytes,tx_bytes=excluded.tx_bytes,sample_count=excluded.sample_count,updated_at=now()
+      WHERE traffic_usage_aggregates.rx_bytes IS DISTINCT FROM excluded.rx_bytes OR traffic_usage_aggregates.tx_bytes IS DISTINCT FROM excluded.tx_bytes
+         OR traffic_usage_aggregates.sample_count IS DISTINCT FROM excluded.sample_count`);
     const raw=await db.query("DELETE FROM traffic_snapshots WHERE captured_at<now()-($1::text||' hours')::interval",[policy.rawTrafficHours]);
     const hours=await db.query("DELETE FROM traffic_usage_aggregates WHERE bucket_type='hour' AND bucket_start<now()-($1::text||' days')::interval",[policy.hourlyDays]);
     const days=await db.query("DELETE FROM traffic_usage_aggregates WHERE bucket_type='day' AND bucket_start<now()-($1::text||' months')::interval",[policy.dailyMonths]);

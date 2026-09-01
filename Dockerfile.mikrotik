@@ -7,7 +7,7 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-mikrotik,target=/pnpm/store pnpm install --frozen-lockfile
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
@@ -30,16 +30,20 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=2040
 ENV HOSTNAME=0.0.0.0
+ENV PERSISTENT_DATA_PATH=/data
 
-RUN groupadd --system --gid 1001 wgcontrol && useradd --system --uid 1001 --gid wgcontrol --create-home wgcontrol
+RUN groupadd --system --gid 1001 wgcontrol && useradd --system --uid 1001 --gid wgcontrol --create-home wgcontrol \
+  && mkdir -p /data && chown wgcontrol:wgcontrol /data
 COPY --from=builder --chown=wgcontrol:wgcontrol /app/.next/standalone ./
 COPY --from=builder --chown=wgcontrol:wgcontrol /app/.next/static ./.next/static
 COPY --from=builder --chown=wgcontrol:wgcontrol /app/public ./public
 COPY --from=builder --chown=wgcontrol:wgcontrol /app/migrations ./migrations
 COPY --from=builder --chown=wgcontrol:wgcontrol /app/dist ./dist
+COPY --from=builder --chown=wgcontrol:wgcontrol /app/scripts/supervisor.mjs ./scripts/supervisor.mjs
 COPY --chown=wgcontrol:wgcontrol docker-entrypoint.sh /usr/local/bin/wg-control-entrypoint
 RUN chmod 0555 /usr/local/bin/wg-control-entrypoint
 USER wgcontrol
 EXPOSE 2040
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["wg-control-entrypoint"]
-CMD ["node", "server.js"]
+CMD ["node", "scripts/supervisor.mjs"]

@@ -1,11 +1,12 @@
 import type { PoolClient } from "pg";
 import { query, withTransaction } from "@/lib/db";
+import { logFault, logRecovery } from "@/lib/logger";
 import { redactError } from "@/lib/security";
 import { clientForRouter, getRouter } from "./router-repository";
 import { remotePeerFingerprint } from "./routeros";
 import type { RemoteWireGuardPeer, RouterOsClient } from "./routeros";
 import { counterDelta, quotaPeriodWindow, type QuotaPeriod, type QuotaPolicy } from "./quota";
-import { getQuotaPolicy, getStatusThresholds, type StatusThresholds } from "./settings";
+import { getPerformancePolicy, getQuotaPolicy, getStatusThresholds, type StatusThresholds } from "./settings";
 
 type AccountingPeer = {
   id: string;
@@ -29,6 +30,7 @@ type AccountingPeer = {
   quota_reached_at: Date | null;
   quota_usage_when_disabled: string | null;
   quota_bypass_until: Date | null;
+  last_traffic_snapshot_at: Date | null;
 };
 
 type Observation = {
@@ -40,15 +42,16 @@ type Observation = {
 };
 
 export async function pollRouterTraffic(routerId: string) {
-  const router = await getRouter(routerId);
-  const client = clientForRouter(router);
-  const [policy,thresholds] = await Promise.all([getQuotaPolicy(),getStatusThresholds()]);
+  let client:RouterOsClient|undefined;
   let observed = 0;
   let disabled = 0;
   let reenabled = 0;
   let failed = 0;
   const attemptedAt=new Date();
   try {
+    const router = await getRouter(routerId);
+    client = clientForRouter(router);
+    const [policy,thresholds,performance] = await Promise.all([getQuotaPolicy(),getStatusThresholds(),getPerformancePolicy()]);
     const [remotePeers, localPeers] = await Promise.all([
       client.getPeers(),
       query<AccountingPeer>("SELECT * FROM peers WHERE router_id=$1 ORDER BY id", [routerId]),
@@ -57,14 +60,16 @@ export async function pollRouterTraffic(routerId: string) {
       const remote = remotePeers.find((item) => item.id === local.remote_id || item.publicKey === local.public_key);
       if (!remote) continue;
       try {
-        const result = await recordObservation(local.id, remote, policy, thresholds);
+        const result = await recordObservation(local.id, remote, policy, thresholds, performance.rawTrafficSampleSeconds);
         observed += 1;
+        logRecovery(`traffic-peer:${local.id}`, "Peer traffic accounting recovered", { peer: local.name });
         const action = await enforceObservation(client, remote, result);
         if (action === "disabled") disabled += 1;
         if (action === "reenabled") reenabled += 1;
       } catch (error) {
         failed += 1;
-        await systemAudit("peer_traffic_poll_failed", local.id, "failure", { error: redactError(error) });
+        const signature=redactError(error);
+        logFault(`traffic-peer:${local.id}`,signature,"Peer traffic accounting failed",{peer:local.name,error:signature});
       }
     }
     await query(`UPDATE routers SET stats_poll_status='reachable',last_stats_poll_at=$2,last_stats_success_at=$2,
@@ -78,10 +83,10 @@ export async function pollRouterTraffic(routerId: string) {
       next_retry_at=now()+(LEAST(3600,power(2,LEAST(consecutive_failures,11))*15)::text||' seconds')::interval,
       last_checked_at=$2,updated_at=now() WHERE id=$1`,[routerId,attemptedAt,redactError(error)]).catch(()=>undefined);
     throw error;
-  } finally { await client.close(); }
+  } finally { await client?.close(); }
 }
 
-async function recordObservation(peerId: string, remote: RemoteWireGuardPeer, policy: QuotaPolicy, thresholds:StatusThresholds): Promise<Observation> {
+async function recordObservation(peerId: string, remote: RemoteWireGuardPeer, policy: QuotaPolicy, thresholds:StatusThresholds, rawTrafficSampleSeconds:number): Promise<Observation> {
   const now = new Date();
   return withTransaction(async (db) => {
     const locked = await db.query<AccountingPeer>("SELECT * FROM peers WHERE id=$1 FOR UPDATE", [peerId]);
@@ -148,13 +153,17 @@ async function recordObservation(peerId: string, remote: RemoteWireGuardPeer, po
         periodRx.toString(), periodTx.toString(), lifetimeRx.toString(), lifetimeTx.toString(),
         periodStart, periodEnd, reached, rolled,remote.lastHandshakeParseValid,consideredOnline,remote.lastHandshakeRaw,remote.disabled],
     );
-    await db.query(
-      `INSERT INTO traffic_snapshots(peer_id,rx_bytes,tx_bytes,last_handshake_at,captured_at,delta_rx_bytes,delta_tx_bytes,
-       lifetime_rx_bytes,lifetime_tx_bytes,period_rx_bytes,period_tx_bytes,quota_period_started_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [peer.id, remote.rxBytes.toString(), remote.txBytes.toString(), remote.lastHandshakeAt, now,
-        deltaRx.toString(), deltaTx.toString(), lifetimeRx.toString(), lifetimeTx.toString(), periodRx.toString(), periodTx.toString(), periodStart],
-    );
+    const lastSnapshot=peer.last_traffic_snapshot_at?new Date(peer.last_traffic_snapshot_at).getTime():0;
+    if(now.getTime()-lastSnapshot>=rawTrafficSampleSeconds*1000){
+      await db.query(
+        `INSERT INTO traffic_snapshots(peer_id,rx_bytes,tx_bytes,last_handshake_at,captured_at,delta_rx_bytes,delta_tx_bytes,
+         lifetime_rx_bytes,lifetime_tx_bytes,period_rx_bytes,period_tx_bytes,quota_period_started_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [peer.id, remote.rxBytes.toString(), remote.txBytes.toString(), remote.lastHandshakeAt, now,
+          deltaRx.toString(), deltaTx.toString(), lifetimeRx.toString(), lifetimeTx.toString(), periodRx.toString(), periodTx.toString(), periodStart],
+      );
+      await db.query("UPDATE peers SET last_traffic_snapshot_at=$2 WHERE id=$1",[peer.id,now]);
+    }
     return { peer: updated.rows[0], used, limit, rolled, previousUsed };
   });
 }
@@ -230,7 +239,7 @@ async function systemAuditWithClient(db: PoolClient, action: string, peerId: str
 }
 
 export async function pollAllRouterTraffic() {
-  const routers = await query<{ id: string; name: string }>("SELECT id,name FROM routers WHERE enabled=true AND (next_retry_at IS NULL OR next_retry_at<=now()) ORDER BY name");
+  const routers = await query<{ id: string; name: string }>("SELECT id,name FROM routers r WHERE enabled=true AND (next_retry_at IS NULL OR next_retry_at<=now()) AND EXISTS(SELECT 1 FROM peers p WHERE p.router_id=r.id) ORDER BY name");
   const totals = { routers: routers.rowCount ?? 0, observed: 0, disabled: 0, reenabled: 0, failed: 0 };
   for (const router of routers.rows) {
     try {
@@ -239,9 +248,11 @@ export async function pollAllRouterTraffic() {
       totals.disabled += result.disabled;
       totals.reenabled += result.reenabled;
       totals.failed += result.failed;
+      logRecovery(`traffic-router:${router.id}`,"Router traffic polling recovered",{router:router.name});
     } catch (error) {
       totals.failed += 1;
-      process.stderr.write(`Traffic polling failed for ${router.name}: ${redactError(error)}\n`);
+      const signature=redactError(error);
+      logFault(`traffic-router:${router.id}`,signature,"Router traffic polling failed",{router:router.name,error:signature});
     }
   }
   return totals;

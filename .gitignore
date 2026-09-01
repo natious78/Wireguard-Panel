@@ -3,6 +3,8 @@ node_modules
 coverage
 .env
 *.log
+backups/
+*.dump
 data
 .DS_Store
 design-system/*/pages/*.tmp

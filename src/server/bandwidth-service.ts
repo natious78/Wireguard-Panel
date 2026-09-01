@@ -231,24 +231,26 @@ export async function persistBandwidthResult(
 export async function observePeerBandwidth(peerId: string) {
   const peer = await loadPeer(peerId);
   if (!peer.client_ip) return { state: "not_configured" as const };
-  const router = await getRouter(peer.router_id);
-  const client = clientForRouter(router);
+  let client:RouterOsClient|undefined;
   try {
+    const router = await getRouter(peer.router_id);
+    client = clientForRouter(router);
     const policy = await getEffectivePeerBandwidth(peerId);
     const [queues,queueTrees,mangleRules,filterRules]=await Promise.all([client.getSimpleQueues(),client.getQueueTrees(),client.getMangleRules(),client.getFilterRules()]);
     return observePeerWithQueues(peer, policy, queues,queueTrees,mangleRules,filterRules);
   } catch (error) {
     await query("UPDATE peers SET bandwidth_sync_state='router_unreachable',updated_at=now() WHERE id=$1", [peer.id]).catch(() => undefined);
     throw error;
-  } finally { await client.close(); }
+  } finally { await client?.close(); }
 }
 
 export async function observeAllBandwidth() {
   const routers=await query<{id:string;name:string}>("SELECT id,name FROM routers WHERE enabled=true AND (next_retry_at IS NULL OR next_retry_at<=now()) ORDER BY name");
   const totals={routers:routers.rows.length,peers:0,drifts:0,failed:0};
   for(const routerRow of routers.rows){
-    const router=await getRouter(routerRow.id);const client=clientForRouter(router);
+    let client:RouterOsClient|undefined;
     try{
+      const router=await getRouter(routerRow.id);client=clientForRouter(router);
       const [queues,queueTrees,mangleRules,filterRules,peers]=await Promise.all([client.getSimpleQueues(),client.getQueueTrees(),client.getMangleRules(),client.getFilterRules(),query<{id:string;router_id:string;name:string;client_ip:string|null}>(
         "SELECT id,router_id,name,host(client_ip) client_ip FROM peers WHERE router_id=$1 AND lifecycle_status IN ('active','needs_reconciliation') AND client_ip IS NOT NULL ORDER BY id",[router.id])]);
       for(const peer of peers.rows){
@@ -257,8 +259,8 @@ export async function observeAllBandwidth() {
       }
     }catch{
       totals.failed+=1;
-      await query("UPDATE peers SET bandwidth_sync_state=CASE WHEN bandwidth_sync_state='not_configured' THEN bandwidth_sync_state ELSE 'router_unreachable' END,updated_at=now() WHERE router_id=$1",[router.id]).catch(()=>undefined);
-    }finally{await client.close()}
+      await query("UPDATE peers SET bandwidth_sync_state=CASE WHEN bandwidth_sync_state='not_configured' THEN bandwidth_sync_state ELSE 'router_unreachable' END,updated_at=now() WHERE router_id=$1",[routerRow.id]).catch(()=>undefined);
+    }finally{await client?.close()}
   }
   return totals;
 }

@@ -36,25 +36,36 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function encryptionKey(): Buffer {
-  const raw = env().APP_ENCRYPTION_KEY;
+function encryptionKey(raw: string): Buffer {
   const decoded = /^[a-f\d]{64}$/i.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
   if (decoded.length !== 32) throw new Error("APP_ENCRYPTION_KEY must decode to exactly 32 bytes.");
   return decoded;
 }
 
 export function encryptSecret(value: string): string {
+  return encryptSecretWithKey(value, env().APP_ENCRYPTION_KEY);
+}
+
+export function encryptSecretWithKey(value: string, rawKey: string): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(rawKey), iv);
   const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `v1.${iv.toString("base64url")}.${tag.toString("base64url")}.${ciphertext.toString("base64url")}`;
 }
 
 export function decryptSecret(payload: string): string {
+  try {
+    return decryptSecretWithKey(payload, env().APP_ENCRYPTION_KEY);
+  } catch {
+    throw new Error("Stored credentials cannot be decrypted. Restore the APP_ENCRYPTION_KEY used when they were saved.");
+  }
+}
+
+export function decryptSecretWithKey(payload: string, rawKey: string): string {
   const [version, ivRaw, tagRaw, ciphertextRaw] = payload.split(".");
   if (version !== "v1" || !ivRaw || !tagRaw || ciphertextRaw === undefined) throw new Error("Invalid encrypted value.");
-  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(ivRaw, "base64url"));
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(rawKey), Buffer.from(ivRaw, "base64url"));
   decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
   return Buffer.concat([
     decipher.update(Buffer.from(ciphertextRaw, "base64url")),

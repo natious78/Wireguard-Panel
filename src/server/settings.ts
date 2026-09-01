@@ -24,3 +24,57 @@ export async function getGlobalBandwidthDefaults():Promise<GlobalBandwidthDefaul
     return value?.mode==="custom"&&value.downloadBps&&value.uploadBps?value:{mode:"unlimited",downloadBps:null,uploadBps:null};
   }catch{return{mode:"unlimited",downloadBps:null,uploadBps:null}}
 }
+
+export type PerformancePolicy = {
+  trafficPollSeconds: number;
+  syncIntervalSeconds: number;
+  routerHealthSeconds: number;
+  bandwidthSeconds: number;
+  operationReconciliationSeconds: number;
+  trafficAggregationSeconds: number;
+  maintenanceSeconds: number;
+  rawTrafficSampleSeconds: number;
+  auditRetentionDays: number;
+  logLevel: "error" | "warn" | "info" | "debug";
+};
+
+export function defaultPerformancePolicy(): PerformancePolicy {
+  const runtime = env();
+  return {
+    trafficPollSeconds: runtime.MIKROTIK_STATS_INTERVAL,
+    syncIntervalSeconds: runtime.SYNC_INTERVAL_SECONDS,
+    routerHealthSeconds: runtime.ROUTER_HEALTH_INTERVAL_SECONDS,
+    bandwidthSeconds: runtime.BANDWIDTH_INTERVAL_SECONDS,
+    operationReconciliationSeconds: runtime.OPERATION_RECONCILIATION_INTERVAL_SECONDS,
+    trafficAggregationSeconds: runtime.TRAFFIC_AGGREGATION_INTERVAL_SECONDS,
+    maintenanceSeconds: runtime.MAINTENANCE_INTERVAL_SECONDS,
+    rawTrafficSampleSeconds: runtime.RAW_TRAFFIC_SAMPLE_SECONDS,
+    auditRetentionDays: runtime.AUDIT_RETENTION_DAYS,
+    logLevel: runtime.LOG_LEVEL,
+  };
+}
+
+export async function getPerformancePolicy(): Promise<PerformancePolicy> {
+  const fallback = defaultPerformancePolicy();
+  try {
+    const value = (await query<{ value: Partial<PerformancePolicy> }>("SELECT value FROM settings WHERE key='performance_policy'")).rows[0]?.value;
+    if (!value) return fallback;
+    const candidate = { ...fallback, ...value };
+    return validPerformancePolicy(candidate) ? candidate : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function validPerformancePolicy(value: PerformancePolicy) {
+  return Number.isInteger(value.trafficPollSeconds) && value.trafficPollSeconds >= 10 && value.trafficPollSeconds <= 3600
+    && Number.isInteger(value.syncIntervalSeconds) && value.syncIntervalSeconds >= 60 && value.syncIntervalSeconds <= 86400
+    && Number.isInteger(value.routerHealthSeconds) && value.routerHealthSeconds >= 30 && value.routerHealthSeconds <= 3600
+    && Number.isInteger(value.bandwidthSeconds) && value.bandwidthSeconds >= 60 && value.bandwidthSeconds <= 86400
+    && Number.isInteger(value.operationReconciliationSeconds) && value.operationReconciliationSeconds >= 30 && value.operationReconciliationSeconds <= 3600
+    && Number.isInteger(value.trafficAggregationSeconds) && value.trafficAggregationSeconds >= 300 && value.trafficAggregationSeconds <= 86400
+    && Number.isInteger(value.maintenanceSeconds) && value.maintenanceSeconds >= 3600 && value.maintenanceSeconds <= 86400
+    && Number.isInteger(value.rawTrafficSampleSeconds) && value.rawTrafficSampleSeconds >= value.trafficPollSeconds && value.rawTrafficSampleSeconds <= 3600
+    && Number.isInteger(value.auditRetentionDays) && value.auditRetentionDays >= 0 && value.auditRetentionDays <= 3650
+    && ["error", "warn", "info", "debug"].includes(value.logLevel);
+}

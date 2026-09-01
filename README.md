@@ -1,5 +1,7 @@
 # WireGuard Control
 
+For deployment directly on supported MikroTik RouterOS hardware, see [MikroTik RouterOS Container deployment](docs/MIKROTIK_CONTAINER.md).
+
 WireGuard Control is a self-hosted operations console for WireGuard peers on multiple MikroTik RouterOS v7 devices. It talks to RouterOS from the server, imports existing configuration without taking ownership of it, detects out-of-band changes, and provides encrypted client configuration and QR export for peers created by the application.
 
 The web application is available at `http://SERVER-IP:2040`. It is also a Progressive Web App (PWA): behind HTTPS (or on `localhost`) supported browsers can install it as a standalone desktop/mobile app. The management APIs remain network-only and are never queued as offline mutations.
@@ -51,8 +53,8 @@ No browser bundle contains MikroTik credentials, WireGuard private keys, or the 
 ## Installation
 
 ```bash
-git clone <repository-url> wireguard-control
-cd wireguard-control
+git clone https://github.com/natious78/Wireguard-Panel.git
+cd Wireguard-Panel
 cp .env.example .env
 ```
 
@@ -99,6 +101,16 @@ docker compose logs --tail=100 app worker
 The entrypoint applies pending migrations under a PostgreSQL advisory lock before the app or worker starts. The named database volume is preserved. Do not use `docker compose down -v` for an upgrade; `-v` deletes the database volume.
 
 Treat any secret pasted into chat, a ticket, or a shell transcript as compromised. On an empty installation, regenerate it before first use. On an installation containing data, do not blindly change `APP_ENCRYPTION_KEY`: existing router credentials and managed peer key material were encrypted with the old key and must be deliberately re-encrypted or re-entered. Changing `ADMIN_PASSWORD` in `.env` also does not replace an administrator that already exists.
+
+To rotate an existing installation safely, stop the application writers, keep the new key in `.env`, and run the one-time transactional rotation with the previous key supplied only to the temporary container:
+
+```bash
+docker compose stop app worker
+OLD_APP_ENCRYPTION_KEY='previous-key' docker compose run --rm -e OLD_APP_ENCRYPTION_KEY app node dist/rotate-encryption-key.cjs
+docker compose up -d app worker
+```
+
+The rotation verifies every encrypted value and rolls back the entire database transaction if any value cannot be decrypted. Never delete the old key until the rotation and a configuration download have been verified.
 
 ## Install as an app
 
@@ -349,4 +361,4 @@ Write operations are limited to WireGuard interfaces, WireGuard peers, and deter
 
 ## License
 
-No license has been selected. Add one before public redistribution.
+WireGuard Control is released under the [MIT License](LICENSE). Copyright (c) 2026 Amir Askari.

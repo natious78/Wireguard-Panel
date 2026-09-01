@@ -18,7 +18,11 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
     const input = routerUpdateSchema.parse(await request.json());
     const existing = (await query<RouterRow>("SELECT * FROM routers WHERE id=$1", [id])).rows[0];
     if (!existing) return fail("Router not found.", 404);
-    const password = input.password || decryptSecret(existing.password_encrypted);
+    let password=input.password;
+    if(!password){
+      try{password=decryptSecret(existing.password_encrypted)}
+      catch{return fail("The stored router password cannot be decrypted. Enter the MikroTik API password to recover this router with the current encryption key.",400)}
+    }
     const client = createRouterClient({ managementIp: input.managementIp,port:input.apiPort,username:input.username,password,
       apiType:input.apiType,useTls:input.useTls,verifyTls:input.verifyTls });
     let facts; try { facts = await client.testConnection(); } finally { await client.close(); }

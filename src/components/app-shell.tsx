@@ -46,7 +46,7 @@ const groups = [
   },
   {
     label: "System",
-    items: [{ href: "/settings", label: "Settings", icon: Settings },{href:"/users",label:"User access",icon:Users}],
+    items: [{href:"/settings/performance",label:"Performance",icon:Gauge},{ href: "/settings", label: "Settings", icon: Settings },{href:"/users",label:"User access",icon:Users}],
   },
 ];
 

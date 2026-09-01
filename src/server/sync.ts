@@ -2,7 +2,7 @@ import { query, withTransaction } from "@/lib/db";
 import { redactError } from "@/lib/security";
 import { clientForRouter, getRouter } from "./router-repository";
 import { remoteInterfaceFingerprint, remotePeerFingerprint } from "./routeros";
-import type { RemoteWireGuardPeer } from "./routeros";
+import type { RemoteWireGuardPeer, RouterOsClient } from "./routeros";
 import { classifyPeerSync } from "./reconciliation";
 import { getStatusThresholds } from "./settings";
 import { fieldDifferences } from "./operations";
@@ -26,10 +26,11 @@ type ExistingInterface={id:string;remote_id:string;name:string;listen_port:numbe
 export async function syncRouter(routerId: string) {
   const run = await query<{ id: string }>("INSERT INTO sync_runs(router_id, status) VALUES ($1,'running') RETURNING id", [routerId]);
   const runId = run.rows[0].id;
-  const router = await getRouter(routerId);
-  const client = clientForRouter(router);
+  let client:RouterOsClient|undefined;
   const summary = { interfaces: 0, imported: 0, updated: 0, conflicts: 0, missing: 0 };
   try {
+    const router = await getRouter(routerId);
+    client = clientForRouter(router);
     const [facts,thresholds] = await Promise.all([client.testConnection(),getStatusThresholds()]);
     const [remoteInterfaces, remotePeers, addresses] = await Promise.all([
       client.getInterfaces(), client.getPeers(), client.getAddresses(), client.getRoutes(), client.getNatRules(),
@@ -146,7 +147,7 @@ export async function syncRouter(routerId: string) {
     await query("UPDATE sync_runs SET status='failed', error=$2, finished_at=now() WHERE id=$1", [runId, message]);
     throw error;
   } finally {
-    await client.close();
+    await client?.close();
   }
 }
 

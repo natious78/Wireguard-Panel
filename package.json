@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:init-admin": "tsx scripts/init-admin.ts",
+    "db:rotate-key": "tsx scripts/rotate-encryption-key.ts",
     "worker": "tsx scripts/worker.ts"
   },
   "engines": {
@@ -43,6 +44,7 @@
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "esbuild": "^0.28.2",
     "eslint": "^9.17.0",
     "eslint-config-next": "15.5.21",
     "eslint-plugin-import": "^2.31.0",
