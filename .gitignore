@@ -1,10 +1,37 @@
-node_modules
-.next
-coverage
+# Dependencies and package-manager caches
+/node_modules/
+/.pnpm-store/
+
+# Framework, compiler, and test output
+/.next/
+/coverage/
+/dist/
+/out/
+*.tsbuildinfo
+
+# Local configuration and secrets
 .env
-*.log
-backups/
+.env.*
+!.env.example
+
+# Runtime data, backups, and logs
+/data/
+/backups/
 *.dump
-data
+*.sql.gz
+*.log
+
+# Local container image exports and RouterOS conversion workspace
+*.tar
+*.tar.gz
+*.oci
+/routeros-image-convert/
+
+# Editor and operating-system files
 .DS_Store
-design-system/*/pages/*.tmp
+Thumbs.db
+/.idea/
+/.vscode/
+
+# Design-tool scratch files
+/design-system/*/pages/*.tmp

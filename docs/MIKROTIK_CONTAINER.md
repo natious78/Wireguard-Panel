@@ -8,14 +8,14 @@ RouterOS supports Linux containers on `arm`, `arm64`, and x86/CHR when the match
 
 MikroTik requires physical confirmation to enable container device mode. MikroTik also strongly recommends external storage and warns that containers increase the router's attack surface. Read the official [Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container), [Device-mode](https://help.mikrotik.com/docs/spaces/ROS/pages/93749258/Device-mode), and [Packages](https://help.mikrotik.com/docs/spaces/ROS/pages/40992872/Packages) documentation before deployment.
 
-This edition intentionally uses two containers:
+The core deployment intentionally uses two containers:
 
 1. `wg-app`: Next.js web/API plus the background scheduler in one container.
 2. `wg-db`: PostgreSQL 17 with one persistent data mount.
 
 One container was rejected as a production architecture. The application uses PostgreSQL `INET`, `CIDR`, `JSONB`, advisory locks, row locks, interval/date functions, and PostgreSQL conflict semantics for race-free IP allocation and quota accounting. A superficial SQLite conversion would weaken correctness. Bundling PostgreSQL into the web image would make lifecycle, recovery, upgrades, and backups less reliable.
 
-There is no Redis, cache container, reverse proxy, Docker socket, or privileged container.
+There is no Redis, cache container, Docker socket, or privileged container. A third reverse-proxy container such as Caddy is optional when the UI must be published over trusted HTTPS.
 
 ## Current architecture audit
 
@@ -26,7 +26,7 @@ There is no Redis, cache container, reverse proxy, Docker socket, or privileged 
 | Worker | TypeScript scheduler for traffic, health, sync, expiration, bandwidth, reconciliation, aggregation, and cleanup |
 | Cache/Redis | None |
 | Normal Docker deployment | `app`, `worker`, and `postgres` Compose services |
-| MikroTik deployment | Combined `app+worker`, plus PostgreSQL |
+| MikroTik deployment | Combined `app+worker`, plus PostgreSQL on one shared veth; optional HTTPS proxy |
 | Durable data | PostgreSQL database and the separately protected `APP_ENCRYPTION_KEY` |
 | Temporary data | QR PNG/SVG is generated on request; no QR image, build cache, or temporary config is persisted |
 | Diagnostic logs | stdout/stderr only; successful polls are silent; repeated failures are state-deduplicated |
@@ -110,7 +110,7 @@ docker buildx build --platform linux/arm64 -f Dockerfile.mikrotik -t wireguard-c
 docker save wireguard-control:mikrotik -o wireguard-control-arm64.tar
 ```
 
-Upload the tar to the external disk, then use the `file=` form shown later. Never build secrets into the image.
+Upload the tar to the external disk, then use the `file=` form shown later. Never build secrets into the image. RouterOS must recognize the archive as a Docker image archive and show a populated `tag`, `os`, `arch`, and `image-id` after extraction. If it reports `no config found in manifest`, convert the image to legacy Docker archive format with Skopeo or publish it to a registry; repeatedly importing the incompatible archive will not fix it.
 
 ## Reference network and storage layout
 
@@ -121,8 +121,7 @@ Router/LAN address:       192.168.88.1
 Trusted admin subnet:     192.168.88.0/24
 Container subnet:         172.31.204.0/24
 Container gateway:        172.31.204.1
-Application container:    172.31.204.2
-PostgreSQL container:     172.31.204.3
+Shared container veth:    172.31.204.2
 Application port:         2040/tcp
 External disk:            disk1
 Persistent root:          disk1/wg-manager
@@ -183,16 +182,16 @@ Format and mount the external disk using **System → Disks** or the commands ap
 
 Create directories from WinBox **Files** or through a temporary container shell if your RouterOS build does not expose directory creation in CLI. The final paths must match the mount commands below.
 
-### 4. Create the container bridge and veth interfaces
+### 4. Create the container bridge and shared veth interface
 
 ```routeros
 /interface/bridge/add name=br-wg-containers comment="WireGuard Control containers"
 /ip/address/add address=172.31.204.1/24 interface=br-wg-containers comment="WireGuard Control container gateway"
-/interface/veth/add name=veth-wg-app address=172.31.204.2/24 gateway=172.31.204.1
-/interface/veth/add name=veth-wg-db address=172.31.204.3/24 gateway=172.31.204.1
-/interface/bridge/port/add bridge=br-wg-containers interface=veth-wg-app
-/interface/bridge/port/add bridge=br-wg-containers interface=veth-wg-db
+/interface/veth/add name=veth-wg address=172.31.204.2/24 gateway=172.31.204.1
+/interface/bridge/port/add bridge=br-wg-containers interface=veth-wg
 ```
+
+Assign both `wg-app` and `wg-db` to `veth-wg`. RouterOS supports one veth for multiple containers; those containers share a network namespace and communicate through loopback. This avoids relying on Docker-style service discovery or cross-veth container routing. PostgreSQL remains unexposed because no destination NAT forwards port 5432.
 
 ### 5. Add outbound NAT
 
@@ -200,13 +199,7 @@ Create directories from WinBox **Files** or through a temporary container shell 
 /ip/firewall/nat/add chain=srcnat action=masquerade src-address=172.31.204.0/24 comment="WG Control container egress"
 ```
 
-The database does not require internet access. Block database WAN egress after image installation:
-
-```routeros
-/ip/firewall/filter/add chain=forward action=drop src-address=172.31.204.3 out-interface-list=WAN comment="Block WG database WAN egress"
-```
-
-Place this rule after any required established/related rule and before broad container allow rules.
+The database shares the application veth but is reachable only inside that namespace on loopback. Do not create a destination-NAT rule for port 5432.
 
 ### 6. Restrict management access to the trusted LAN
 
@@ -291,7 +284,7 @@ The first value is `APP_ENCRYPTION_KEY`; the second can be used as the initial a
 /container/envs/add list=wg-app-env key=APP_URL value=http://192.168.88.1:2040
 /container/envs/add list=wg-app-env key=PORT value=2040
 /container/envs/add list=wg-app-env key=HOSTNAME value=0.0.0.0
-/container/envs/add list=wg-app-env key=DB_HOST value=172.31.204.3
+/container/envs/add list=wg-app-env key=DB_HOST value=127.0.0.1
 /container/envs/add list=wg-app-env key=DB_PORT value=5432
 /container/envs/add list=wg-app-env key=DB_NAME value=wireguard_control
 /container/envs/add list=wg-app-env key=DB_USER value=wireguard_control
@@ -326,14 +319,14 @@ This application does not use a static `SESSION_SECRET`: session tokens are cryp
 ### 12. Add PostgreSQL
 
 ```routeros
-/container/add remote-image=postgres:17-alpine interface=veth-wg-db root-dir=disk1/wg-manager/images/postgres mountlists=wg-db-mounts envlist=wg-db-env name=wg-db start-on-boot=yes auto-restart-interval=10s logging=no memory-high=128M memory-max=192M cmd="-c shared_buffers=32MB -c max_connections=25 -c wal_compression=on -c checkpoint_timeout=15min -c max_wal_size=128MB -c min_wal_size=32MB -c log_min_messages=warning"
+/container/add remote-image=postgres:17-alpine interface=veth-wg root-dir=disk1/wg-manager/images/postgres mountlists=wg-db-mounts envlist=wg-db-env name=wg-db start-on-boot=yes logging=no
 ```
 
 Wait until image extraction finishes and the status becomes `stopped`:
 
 ```routeros
 /container/print detail where name="wg-db"
-/container/start wg-db
+/container/start [find where name="wg-db"]
 ```
 
 ### 13. Add the application
@@ -341,14 +334,14 @@ Wait until image extraction finishes and the status becomes `stopped`:
 Replace the image path with the image published by your build pipeline:
 
 ```routeros
-/container/add remote-image=ghcr.io/your-org/wireguard-control:mikrotik interface=veth-wg-app root-dir=disk1/wg-manager/images/app mountlists=wg-app-mounts envlist=wg-app-env name=wg-app start-on-boot=yes auto-restart-interval=10s logging=no memory-high=256M memory-max=384M dns=1.1.1.1
+/container/add remote-image=ghcr.io/your-org/wireguard-control:mikrotik interface=veth-wg root-dir=disk1/wg-manager/images/app mountlists=wg-app-mounts envlist=wg-app-env name=wg-app start-on-boot=yes logging=no
 ```
 
 Then start it:
 
 ```routeros
 /container/print detail where name="wg-app"
-/container/start wg-app
+/container/start [find where name="wg-app"]
 ```
 
 The application automatically retries if PostgreSQL is still initializing. Its entrypoint runs migrations and creates the first administrator only when no user exists.
@@ -356,7 +349,7 @@ The application automatically retries if PostgreSQL is still initializing. Its e
 Offline tar import replaces `remote-image=` with `file=`:
 
 ```routeros
-/container/add file=disk1/wg-manager/wireguard-control-arm64.tar interface=veth-wg-app root-dir=disk1/wg-manager/images/app mountlists=wg-app-mounts envlist=wg-app-env name=wg-app start-on-boot=yes auto-restart-interval=10s logging=no memory-high=256M memory-max=384M dns=1.1.1.1
+/container/add file=disk1/wg-manager/wireguard-control-arm64.tar interface=veth-wg root-dir=disk1/wg-manager/images/app mountlists=wg-app-mounts envlist=wg-app-env name=wg-app start-on-boot=yes logging=no
 ```
 
 ### 14. Verify application health
@@ -384,8 +377,8 @@ Open `http://192.168.88.1:2040`, sign in, then remove `ADMIN_PASSWORD` from the 
 Restart the application after changing an envlist:
 
 ```routeros
-/container/stop wg-app
-/container/start wg-app
+/container/stop [find where name="wg-app"]
+/container/start [find where name="wg-app"]
 ```
 
 ### 15. Connect the first MikroTik
@@ -395,7 +388,7 @@ In the application, add the router with:
 ```text
 Management IP: 172.31.204.1 or the router's reachable management IP
 API type: Native
-Port: 8729 for api-ssl
+Port: the exact port shown by `/ip/service/print detail` (8729 for default api-ssl)
 TLS: enabled
 Verify TLS: enabled when the certificate chain/name is valid
 Username: wg-control
@@ -409,10 +402,10 @@ Run **Test connection**, save, synchronize, and verify interfaces, peers, last h
 Create or import a test peer, then record its lifetime/current usage. Restart both containers:
 
 ```routeros
-/container/stop wg-app
-/container/stop wg-db
-/container/start wg-db
-/container/start wg-app
+/container/stop [find where name="wg-app"]
+/container/stop [find where name="wg-db"]
+/container/start [find where name="wg-db"]
+/container/start [find where name="wg-app"]
 ```
 
 Verify the user, router, peer, encrypted configuration, usage, audit history, and worker health remain present. Then perform a planned router reboot and repeat the verification.
@@ -497,9 +490,9 @@ Before every update:
 4. Update the app image:
 
 ```routeros
-/container/stop wg-app
-/container/update wg-app
-/container/start wg-app
+/container/stop [find where name="wg-app"]
+/container/update [find where name="wg-app"]
+/container/start [find where name="wg-app"]
 ```
 
 Verify `/health`, authentication, one router sync, online/offline status, quota state, and QR/config download. If a database migration ran, rolling the image back may also require restoring the pre-update database dump.
@@ -606,7 +599,7 @@ The PostgreSQL mount is wrong or points to volatile/internal storage. Verify `mo
 
 ### Router reboot or application restart
 
-Both containers need `start-on-boot=yes` and `auto-restart-interval=10s`. PostgreSQL may take longer; the app exits and retries until migrations can connect. Verify scheduler state in `/health` and Settings → Performance.
+Both containers need `start-on-boot=yes`. Do not copy the obsolete `auto-restart-interval` parameter from older examples; RouterOS 7.24 rejects it. Restart-policy fields vary by RouterOS release, so inspect `/container/set ?` on the target router before configuring them. PostgreSQL may take longer to initialize; the application entrypoint retries database readiness. Verify scheduler state in `/health` and **Settings → Performance**.
 
 ### All peers show Router Unreachable after changing encryption key
 

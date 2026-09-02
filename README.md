@@ -1,10 +1,15 @@
 # WireGuard Control
 
-For deployment directly on supported MikroTik RouterOS hardware, see [MikroTik RouterOS Container deployment](docs/MIKROTIK_CONTAINER.md).
-
 WireGuard Control is a self-hosted operations console for WireGuard peers on multiple MikroTik RouterOS v7 devices. It talks to RouterOS from the server, imports existing configuration without taking ownership of it, detects out-of-band changes, and provides encrypted client configuration and QR export for peers created by the application.
 
 The web application is available at `http://SERVER-IP:2040`. It is also a Progressive Web App (PWA): behind HTTPS (or on `localhost`) supported browsers can install it as a standalone desktop/mobile app. The management APIs remain network-only and are never queued as offline mutations.
+
+## Deployment options
+
+- **Docker Compose (recommended):** runs separate application, worker, and PostgreSQL services on a normal Linux/Windows Docker host.
+- **MikroTik RouterOS containers:** runs a combined application/worker image and PostgreSQL directly on supported RouterOS hardware. Follow the dedicated [RouterOS container guide](docs/MIKROTIK_CONTAINER.md); Docker Compose commands do not run in a RouterOS terminal.
+
+Do not commit `.env`, PostgreSQL data, database dumps, or exported container images. RouterOS `.tar` archives are build artifacts and must be generated or attached to a release, not stored in Git.
 
 ## What is included
 
@@ -50,7 +55,7 @@ No browser bundle contains MikroTik credentials, WireGuard private keys, or the 
 - 1 GB RAM minimum; 2 GB recommended
 - Accurate time on the Docker host and routers
 
-## Installation
+## Quick start with Docker Compose
 
 ```bash
 git clone https://github.com/natious78/Wireguard-Panel.git
@@ -80,6 +85,7 @@ Then start the stack:
 ```bash
 docker compose up -d --build
 docker compose ps
+curl -fsS http://127.0.0.1:2040/health
 ```
 
 Open `http://SERVER-IP:2040`. The first startup creates the administrator only if the `users` table is empty. Later changes to `ADMIN_PASSWORD` do not overwrite an existing account.
@@ -129,6 +135,8 @@ Create a dedicated group and user. RouterOS policy permissions are coarse-graine
 /user/add name=wg-control group=wg-control password="REPLACE_WITH_A_LONG_PASSWORD" address=APP_SERVER_IP/32
 /ip/service/set api disabled=no port=8728 address=APP_SERVER_IP/32
 ```
+
+Port `8728` is only the RouterOS default. If `/ip/service/print detail where name="api"` shows a custom port, enter that exact port in the application. For an application running on the same RouterOS device, use the router-side container gateway as the management IP—not `127.0.0.1`, the public hostname, or the application container address.
 
 For native API over TLS, configure RouterOS `api-ssl`, a certificate trusted by the Docker host, port 8729, and select **Use TLS** in the router form. Do not disable certificate verification except during a controlled bootstrap.
 
@@ -284,6 +292,8 @@ pnpm lint
 pnpm test
 pnpm build
 ```
+
+Generated dependency stores, TypeScript build metadata, database backups, and Docker/RouterOS image archives are intentionally ignored. Keep release images in a container registry or GitHub Release rather than committing binary archives to the repository.
 
 For UI development without a real router, explicitly set `DEMO_MODE=true`, start PostgreSQL, and add a router with any valid IP and credentials. Every RouterOS client is then replaced by the in-memory demo adapter. Never enable demo mode in production.
 

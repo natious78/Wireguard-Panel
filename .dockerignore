@@ -9,5 +9,8 @@ backups
 .pnpm-store
 docs
 tsconfig.tsbuildinfo
-benchmarks/*.tar
+routeros-image-convert
+*.tar
+*.tar.gz
+*.oci
 *.log
